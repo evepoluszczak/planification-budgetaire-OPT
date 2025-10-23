@@ -138,10 +138,15 @@ def render_budget_annuel_page():
                             category_cost_cols = [c.replace('Coût_', '') for c in cost_cols]
                             df_costs.columns = ['Mois'] + category_cost_cols
                             if category_cost_cols:
-                                df_costs[category_cost_cols] = df_costs[category_cost_cols].apply(
-                                    pd.to_numeric, errors='coerce'
-                                ).fillna(0.0).astype(float)
-                            df_costs['Total'] = df_costs[category_cost_cols].sum(axis=1)
+                                # Convertir toutes les colonnes numériques en float et remplacer NaN
+                                for col in category_cost_cols:
+                                    df_costs[col] = pd.to_numeric(
+                                        df_costs[col], errors='coerce'
+                                    ).fillna(0.0).astype(float)
+                                # Calculer le Total
+                                df_costs['Total'] = df_costs[category_cost_cols].sum(axis=1).astype(float)
+                            else:
+                                df_costs['Total'] = 0.0
 
                             col_config_costs = {"Mois": st.column_config.TextColumn("Mois")}
                             for cat in category_cost_cols:
@@ -152,7 +157,6 @@ def render_budget_annuel_page():
                                 "Total", format="%,.0f CHF"
                             )
 
-                            df_costs = df_costs.fillna(0)
                             st.dataframe(
                                 df_costs, column_config=col_config_costs,
                                 hide_index=True, use_container_width=True
@@ -163,10 +167,15 @@ def render_budget_annuel_page():
                             category_hour_cols = [c.replace('Heures_', '') for c in hour_cols]
                             df_hours.columns = ['Mois'] + category_hour_cols
                             if category_hour_cols:
-                                df_hours[category_hour_cols] = df_hours[category_hour_cols].apply(
-                                    pd.to_numeric, errors='coerce'
-                                ).fillna(0.0).astype(float)
-                            df_hours['Total'] = df_hours[category_hour_cols].sum(axis=1)
+                                # Convertir toutes les colonnes numériques en float et remplacer NaN
+                                for col in category_hour_cols:
+                                    df_hours[col] = pd.to_numeric(
+                                        df_hours[col], errors='coerce'
+                                    ).fillna(0.0).astype(float)
+                                # Calculer le Total
+                                df_hours['Total'] = df_hours[category_hour_cols].sum(axis=1).astype(float)
+                            else:
+                                df_hours['Total'] = 0.0
 
                             col_config_hours = {"Mois": st.column_config.TextColumn("Mois")}
                             for cat in category_hour_cols:
