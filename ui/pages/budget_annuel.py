@@ -151,10 +151,10 @@ def render_budget_annuel_page():
                             col_config_costs = {"Mois": st.column_config.TextColumn("Mois")}
                             for cat in category_cost_cols:
                                 col_config_costs[cat] = st.column_config.NumberColumn(
-                                    f"{cat}", format="%,.0f CHF"
+                                    f"{cat} (CHF)", format="%.0f"
                                 )
                             col_config_costs["Total"] = st.column_config.NumberColumn(
-                                "Total", format="%,.0f CHF"
+                                "Total (CHF)", format="%.0f"
                             )
 
                             st.dataframe(
@@ -180,10 +180,10 @@ def render_budget_annuel_page():
                             col_config_hours = {"Mois": st.column_config.TextColumn("Mois")}
                             for cat in category_hour_cols:
                                 col_config_hours[cat] = st.column_config.NumberColumn(
-                                    f"{cat}", format="%.1f h"
+                                    f"{cat} (h)", format="%.1f"
                                 )
                             col_config_hours["Total"] = st.column_config.NumberColumn(
-                                "Total", format="%.1f h"
+                                "Total (h)", format="%.1f"
                             )
 
                             st.dataframe(
@@ -244,7 +244,7 @@ def render_budget_annuel_page():
                                 for cat_col in cost_view_cols_rename.values():
                                     if cat_col not in ["Date", "Jour"]:
                                         daily_cost_config[cat_col] = st.column_config.NumberColumn(
-                                            f"{cat_col} (CHF)", format="%,.0f"
+                                            f"{cat_col} (CHF)", format="%.0f"
                                         )
 
                                 st.dataframe(
