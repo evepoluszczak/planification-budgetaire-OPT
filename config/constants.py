@@ -10,7 +10,9 @@ GVA_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Logo_G
 BASE_DIR = Path(__file__).parent.parent
 RULES_PLANNING_PATH = BASE_DIR / "rules_planning.json"
 RULES_BESOIN_JOUR_PATH = BASE_DIR / "rules_besoin_jour.json"
-PAX_DATA_FILE_PATH = BASE_DIR / "Forecast_pax.xlsx"
+PAX_DATA_FILE_PATH = BASE_DIR / "Forecast_pax.xlsx"  # Kept for compatibility
+PAX_FORECAST_FILE_PATH = BASE_DIR / "Forecast_pax.xlsx"
+PAX_HISTORICAL_FILE_PATH = BASE_DIR / "Historic_pax.xlsx"
 FACTU_AT_DIR = BASE_DIR / "facturation_at"
 FACTU_AT_GLOB = "Facturation Lot A *.xlsx"
 

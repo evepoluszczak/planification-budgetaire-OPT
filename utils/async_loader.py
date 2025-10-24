@@ -9,47 +9,87 @@ import streamlit as st
 
 
 class PaxLoaderThread(threading.Thread):
-    """Thread pour charger les données PAX en arrière-plan"""
+    """Thread pour charger les données PAX (Forecast + Historic) en arrière-plan"""
 
-    def __init__(self, file_path: Path, session_state_key: str):
+    def __init__(self, forecast_path: Path, historical_path: Path, session_state_key: str):
         super().__init__(daemon=True)
-        self.file_path = file_path
+        self.forecast_path = forecast_path
+        self.historical_path = historical_path
         self.session_state_key = session_state_key
         self.result = None
         self.error = None
+        self.progress = {'current_file': None, 'percent': 0}
 
     def run(self):
         """Exécute le chargement en arrière-plan"""
         try:
-            # Import ici pour éviter les problèmes de circular imports
-            from core.data_loader import load_pax_data
+            results = {
+                'forecast': None,
+                'historical': None,
+                'status': 'success',
+                'errors': []
+            }
 
-            # Charger les données (sans cache pour forcer un rechargement)
-            full_pax_data, overall_min_date, overall_max_date = self._load_pax_uncached(
-                self.file_path, "Passagers Forecast"
-            )
+            # Charger Forecast
+            self.progress = {'current_file': 'Forecast', 'percent': 0}
+            try:
+                forecast_data, fc_min, fc_max = self._load_pax_uncached(
+                    self.forecast_path, "Forecast PAX"
+                )
+                if not forecast_data.empty:
+                    results['forecast'] = {
+                        'data': forecast_data,
+                        'min_date': fc_min,
+                        'max_date': fc_max,
+                        'status': 'loaded'
+                    }
+                else:
+                    results['forecast'] = {'status': 'empty'}
+                    results['errors'].append('Forecast: Fichier vide')
+            except Exception as e:
+                results['forecast'] = {'status': 'error', 'error': str(e)}
+                results['errors'].append(f'Forecast: {str(e)}')
 
-            if not full_pax_data.empty:
-                # Séparer historique et forecast
-                today = dt.date.today()
-                historical_data = full_pax_data[full_pax_data.index.date < today].copy()
-                forecast_data = full_pax_data[full_pax_data.index.date >= today].copy()
+            self.progress = {'current_file': 'Forecast', 'percent': 50}
 
-                self.result = {
-                    'full_data': full_pax_data,
-                    'overall_min_date': overall_min_date,
-                    'overall_max_date': overall_max_date,
-                    'historical_data': historical_data,
-                    'forecast_data': forecast_data,
-                    'status': 'success'
-                }
+            # Charger Historic
+            self.progress = {'current_file': 'Historic', 'percent': 50}
+            try:
+                historical_data, hist_min, hist_max = self._load_pax_uncached(
+                    self.historical_path, "Historic PAX"
+                )
+                if not historical_data.empty:
+                    results['historical'] = {
+                        'data': historical_data,
+                        'min_date': hist_min,
+                        'max_date': hist_max,
+                        'status': 'loaded'
+                    }
+                else:
+                    results['historical'] = {'status': 'empty'}
+                    results['errors'].append('Historic: Fichier vide')
+            except Exception as e:
+                results['historical'] = {'status': 'error', 'error': str(e)}
+                results['errors'].append(f'Historic: {str(e)}')
+
+            self.progress = {'current_file': 'Historic', 'percent': 100}
+
+            # Déterminer le statut global
+            if results['forecast'] and results['forecast'].get('status') == 'loaded':
+                if results['historical'] and results['historical'].get('status') == 'loaded':
+                    results['status'] = 'success'
+                else:
+                    results['status'] = 'partial'  # Seulement Forecast chargé
+            elif results['historical'] and results['historical'].get('status') == 'loaded':
+                results['status'] = 'partial'  # Seulement Historic chargé
             else:
-                self.error = "Le fichier est vide ou n'a pas pu être lu"
-                self.result = {'status': 'empty'}
+                results['status'] = 'error'  # Aucun fichier chargé
+
+            self.result = results
 
         except Exception as e:
             self.error = str(e)
-            self.result = {'status': 'error', 'error': str(e)}
+            self.result = {'status': 'error', 'error': str(e), 'errors': [str(e)]}
 
     def _load_pax_uncached(self, file_path: Path, file_description: str):
         """Version non-cachée de load_pax_data pour forcer le rechargement"""
@@ -120,19 +160,19 @@ class PaxLoaderThread(threading.Thread):
         return pax_agg, min_date, max_date
 
 
-def start_pax_loading(file_path: Path):
+def start_pax_loading(forecast_path: Path, historical_path: Path):
     """
-    Démarre le chargement des données PAX en arrière-plan.
+    Démarre le chargement des données PAX (Forecast + Historic) en arrière-plan.
     Met à jour st.session_state pour tracker l'état.
     """
     # Initialiser l'état de chargement
     st.session_state.pax_loading_status = 'loading'
-    st.session_state.pax_loading_progress = 0
+    st.session_state.pax_loading_progress = {'current_file': 'Démarrage...', 'percent': 0}
     st.session_state.pax_loading_error = None
 
     # Créer et démarrer le thread
     session_key = f'pax_loader_{dt.datetime.now().timestamp()}'
-    loader_thread = PaxLoaderThread(file_path, session_key)
+    loader_thread = PaxLoaderThread(forecast_path, historical_path, session_key)
 
     # Stocker la référence au thread
     st.session_state.pax_loader_thread = loader_thread
@@ -147,7 +187,7 @@ def start_pax_loading(file_path: Path):
 def check_pax_loading_status():
     """
     Vérifie l'état du chargement PAX et met à jour session_state.
-    Retourne: 'loading', 'success', 'error', ou 'idle'
+    Retourne: 'loading', 'success', 'partial', 'error', ou 'idle'
     """
     if 'pax_loader_thread' not in st.session_state:
         return 'idle'
@@ -159,59 +199,55 @@ def check_pax_loading_status():
         # Calculer le temps écoulé
         elapsed = (dt.datetime.now() - st.session_state.pax_loader_start_time).total_seconds()
         st.session_state.pax_loading_elapsed = elapsed
+        # Mettre à jour la progression
+        st.session_state.pax_loading_progress = thread.progress
         return 'loading'
 
     # Le thread est terminé, récupérer les résultats
     if thread.result is not None:
         result = thread.result
+        status = result.get('status')
 
-        if result.get('status') == 'success':
-            # Stocker les données dans session_state
-            st.session_state.pax_forecast_data = result['forecast_data']
-            st.session_state.pax_historical_data = result['historical_data']
-            st.session_state.pax_overall_min_date = result['overall_min_date']
-            st.session_state.pax_overall_max_date = result['overall_max_date']
-
-            # Stocker les dates min/max pour forecast et historical
-            if not result['forecast_data'].empty:
-                st.session_state.pax_forecast_min_date = result['forecast_data'].index.min().date()
-                st.session_state.pax_forecast_max_date = result['forecast_data'].index.max().date()
-                st.session_state.pax_forecast_status = 'loaded'
-            else:
-                st.session_state.pax_forecast_status = 'no_data_found'
-
-            if not result['historical_data'].empty:
-                st.session_state.pax_historical_min_date = result['historical_data'].index.min().date()
-                st.session_state.pax_historical_max_date = result['historical_data'].index.max().date()
-                st.session_state.pax_historical_status = 'loaded'
-            else:
-                st.session_state.pax_historical_status = 'no_data_found'
-
-            st.session_state.pax_loading_status = 'success'
-            st.session_state.pax_data_status = 'attempted'
-
-            # Nettoyer la référence au thread
-            del st.session_state.pax_loader_thread
-
-            return 'success'
+        # Stocker les données Forecast
+        if result.get('forecast') and result['forecast'].get('status') == 'loaded':
+            fc_data = result['forecast']['data']
+            st.session_state.pax_forecast_data = fc_data
+            st.session_state.pax_forecast_min_date = result['forecast']['min_date']
+            st.session_state.pax_forecast_max_date = result['forecast']['max_date']
+            st.session_state.pax_forecast_status = 'loaded'
         else:
-            # Erreur ou vide
-            st.session_state.pax_loading_status = 'error'
-            st.session_state.pax_loading_error = result.get('error', 'Données vides')
+            st.session_state.pax_forecast_status = result.get('forecast', {}).get('status', 'not_loaded')
 
-            # Nettoyer la référence au thread
-            del st.session_state.pax_loader_thread
+        # Stocker les données Historic
+        if result.get('historical') and result['historical'].get('status') == 'loaded':
+            hist_data = result['historical']['data']
+            st.session_state.pax_historical_data = hist_data
+            st.session_state.pax_historical_min_date = result['historical']['min_date']
+            st.session_state.pax_historical_max_date = result['historical']['max_date']
+            st.session_state.pax_historical_status = 'loaded'
+        else:
+            st.session_state.pax_historical_status = result.get('historical', {}).get('status', 'not_loaded')
 
-            return 'error'
+        # Stocker le statut global
+        st.session_state.pax_loading_status = status
+        st.session_state.pax_data_status = 'attempted'
+
+        # Stocker les erreurs s'il y en a
+        if result.get('errors'):
+            st.session_state.pax_loading_error = ' | '.join(result['errors'])
+        else:
+            st.session_state.pax_loading_error = None
+
+        # Nettoyer la référence au thread
+        del st.session_state.pax_loader_thread
+
+        return status
 
     # Erreur durant l'exécution
     if thread.error is not None:
         st.session_state.pax_loading_status = 'error'
         st.session_state.pax_loading_error = thread.error
-
-        # Nettoyer la référence au thread
         del st.session_state.pax_loader_thread
-
         return 'error'
 
     # État indéterminé (ne devrait pas arriver)
@@ -226,8 +262,13 @@ def get_pax_loading_info():
         'status': status,
         'elapsed': st.session_state.get('pax_loading_elapsed', 0),
         'error': st.session_state.get('pax_loading_error'),
+        'progress': st.session_state.get('pax_loading_progress', {}),
         'forecast_status': st.session_state.get('pax_forecast_status'),
-        'historical_status': st.session_state.get('pax_historical_status')
+        'historical_status': st.session_state.get('pax_historical_status'),
+        'forecast_min': st.session_state.get('pax_forecast_min_date'),
+        'forecast_max': st.session_state.get('pax_forecast_max_date'),
+        'historical_min': st.session_state.get('pax_historical_min_date'),
+        'historical_max': st.session_state.get('pax_historical_max_date'),
     }
 
     return info

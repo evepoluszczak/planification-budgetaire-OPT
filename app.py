@@ -9,7 +9,8 @@ import streamlit as st
 
 # Imports des modules custom
 from config.settings import configure_streamlit, render_gva_header
-from config.constants import RULES_BESOIN_JOUR_PATH, PAX_DATA_FILE_PATH, FACTU_AT_DIR
+from config.constants import (RULES_BESOIN_JOUR_PATH, PAX_DATA_FILE_PATH, FACTU_AT_DIR,
+                              PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH)
 from models.session_state import initialize_session_state_2026
 from core.budget import generate_budget_state
 from core.data_loader import load_pax_data
@@ -112,47 +113,89 @@ else:
         if loading_status == 'idle':
             # Bouton pour lancer le chargement
             if st.button("🔄 Lancer le chargement PAX", use_container_width=True, type="secondary"):
-                if PAX_DATA_FILE_PATH.exists():
-                    start_pax_loading(PAX_DATA_FILE_PATH)
+                # Vérifier que les fichiers existent
+                forecast_exists = PAX_FORECAST_FILE_PATH.exists()
+                historical_exists = PAX_HISTORICAL_FILE_PATH.exists()
+
+                if not forecast_exists and not historical_exists:
+                    st.error(f"Aucun fichier PAX trouvé")
+                else:
+                    if not forecast_exists:
+                        st.warning(f"Forecast_pax.xlsx non trouvé, chargement Historic uniquement")
+                    if not historical_exists:
+                        st.warning(f"Historic_pax.xlsx non trouvé, chargement Forecast uniquement")
+
+                    start_pax_loading(PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH)
                     st.toast("Chargement PAX démarré en arrière-plan...", icon="🔄")
                     st.rerun()
-                else:
-                    st.error(f"Fichier non trouvé : {PAX_DATA_FILE_PATH}")
 
         elif loading_status == 'loading':
             # Afficher l'état de chargement avec barre de progression
             elapsed = pax_info.get('elapsed', 0)
-            st.info(f"⏳ Chargement en cours... ({elapsed:.1f}s)")
+            progress = pax_info.get('progress', {})
+            current_file = progress.get('current_file', '...')
+            percent = progress.get('percent', 0)
 
-            # Barre de progression indéterminée
-            progress_bar = st.progress(0)
-            # Animation de la barre (simule un chargement)
-            import time
-            progress_value = int((elapsed * 10) % 100)
-            progress_bar.progress(progress_value)
+            st.info(f"⏳ Chargement {current_file}... ({elapsed:.1f}s)")
+
+            # Barre de progression basée sur le fichier en cours
+            progress_bar = st.progress(percent / 100 if percent > 0 else 0)
 
             # Auto-refresh toutes les 0.5 secondes
+            import time
             time.sleep(0.5)
             st.rerun()
 
         elif loading_status == 'success':
-            # Afficher le succès
+            # Afficher le succès - tous les fichiers chargés
             st.success("✅ Données PAX chargées")
 
-            # Afficher les statistiques
+            # Afficher les statistiques Forecast
             if pax_info.get('forecast_status') == 'loaded':
-                min_date = st.session_state.get('pax_forecast_min_date')
-                max_date = st.session_state.get('pax_forecast_max_date')
-                st.caption(f"📊 Forecast : {min_date} → {max_date}")
+                fc_min = pax_info.get('forecast_min')
+                fc_max = pax_info.get('forecast_max')
+                st.caption(f"📊 Forecast : {fc_min} → {fc_max}")
 
+            # Afficher les statistiques Historic
             if pax_info.get('historical_status') == 'loaded':
-                min_date = st.session_state.get('pax_historical_min_date')
-                max_date = st.session_state.get('pax_historical_max_date')
-                st.caption(f"📈 Historique : {min_date} → {max_date}")
+                hist_min = pax_info.get('historical_min')
+                hist_max = pax_info.get('historical_max')
+                st.caption(f"📈 Historique : {hist_min} → {hist_max}")
 
             # Bouton pour recharger
             if st.button("🔄 Recharger", use_container_width=True, type="secondary"):
                 # Réinitialiser l'état
+                st.session_state.pax_loading_status = 'idle'
+                st.session_state.pop('pax_data_status', None)
+                st.toast("Prêt à recharger les données", icon="🔄")
+                st.rerun()
+
+        elif loading_status == 'partial':
+            # Afficher un succès partiel - un seul fichier chargé
+            st.warning("⚠️ Chargement partiel")
+
+            # Afficher ce qui a été chargé
+            if pax_info.get('forecast_status') == 'loaded':
+                fc_min = pax_info.get('forecast_min')
+                fc_max = pax_info.get('forecast_max')
+                st.caption(f"✅ Forecast : {fc_min} → {fc_max}")
+            else:
+                st.caption(f"❌ Forecast : non chargé")
+
+            if pax_info.get('historical_status') == 'loaded':
+                hist_min = pax_info.get('historical_min')
+                hist_max = pax_info.get('historical_max')
+                st.caption(f"✅ Historique : {hist_min} → {hist_max}")
+            else:
+                st.caption(f"❌ Historique : non chargé")
+
+            # Afficher les erreurs si disponibles
+            if pax_info.get('error'):
+                with st.expander("Détails des erreurs"):
+                    st.error(pax_info.get('error'))
+
+            # Bouton pour recharger
+            if st.button("🔄 Recharger", use_container_width=True, type="secondary"):
                 st.session_state.pax_loading_status = 'idle'
                 st.session_state.pop('pax_data_status', None)
                 st.toast("Prêt à recharger les données", icon="🔄")
