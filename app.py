@@ -288,13 +288,13 @@ else:
         render_simulateur_objectif_page()
 
    elif page == "Analyse Budgétaire":
-    import importlib, traceback, streamlit as st
-    try:
-        ab = importlib.import_module("ui.pages.analyse_budgetaire")
-        render_analyse_budgetaire_page = getattr(ab, "render_analyse_budgetaire_page")
-    except Exception:
-        st.error("❌ Erreur lors du chargement de la page Analyse Budgétaire")
-        st.code(traceback.format_exc())
-        st.stop()
-    render_analyse_budgetaire_page()
+        import importlib, traceback, streamlit as st
+        try:
+            ab = importlib.import_module("ui.pages.analyse_budgetaire")
+            render_analyse_budgetaire_page = getattr(ab, "render_analyse_budgetaire_page")
+        except Exception:
+            st.error("❌ Erreur lors du chargement de la page Analyse Budgétaire")
+            st.code(traceback.format_exc())
+            st.stop()
+        render_analyse_budgetaire_page()
 
