@@ -162,20 +162,83 @@ def load_facturation_dir(dir_path: Path) -> pd.DataFrame:
 
 def _pick_calendar_base_and_modified():
     """
-    Renvoie (df_annuel, df_modifie).
-    Par convention:
-      - Annuel   = st.session_state['calendar_df'] (prévision)
-      - Modifié  = st.session_state['calendar_df_adjusted'] si présent, sinon = Annuel
+    Renvoie (df_annuel, df_modifie) en cherchant dans:
+      - st.session_state[...] (top-level)
+      - st.session_state['budget_state'][...] (dict bs)
+    et quelques alias courants.
     """
-    df_annuel = st.session_state.get("calendar_df")
-    df_mod = st.session_state.get("calendar_df_adjusted")
-    if isinstance(df_annuel, pd.DataFrame) and (df_mod is None):
-        df_mod = df_annuel
-    if not isinstance(df_annuel, pd.DataFrame):
+    def _is_ok(df):
+        return isinstance(df, pd.DataFrame) and (not df.empty) and ("Date" in df.columns)
+
+    # 1) Cherche au top-level
+    top_candidates = {}
+    for k in [
+        "calendar_df_adjusted", "calendar_df",
+        "generated_calendar_df", "budget_calendar_df"
+    ]:
+        df = st.session_state.get(k)
+        if _is_ok(df):
+            top_candidates[k] = df
+
+    # 2) Cherche dans les sous-dicts éventuels (budget_state / bs / budget)
+    nested_candidates = {}
+    for container_key in ["budget_state", "bs", "budget"]:
+        sub = st.session_state.get(container_key)
+        if isinstance(sub, dict):
+            for k in [
+                "calendar_df_adjusted", "calendar_df",
+                "generated_calendar_df", "budget_calendar_df"
+            ]:
+                df = sub.get(k)
+                if _is_ok(df):
+                    nested_candidates[f"{container_key}.{k}"] = df
+
+    # Fusion affichage (pour debug éventuel)
+    found = {**top_candidates, **nested_candidates}
+
+    # Sélection priorisée
+    df_annuel = None
+    df_mod = None
+
+    # Préfère les clés 'adjusted' pour modifié
+    for key in ["calendar_df_adjusted", "generated_calendar_df_adjusted"]:
+        # top-level
+        if key in top_candidates:
+            df_mod = top_candidates[key]
+        # nested
+        for nk, v in nested_candidates.items():
+            if nk.endswith("." + key):
+                df_mod = v
+    # Si pas trouvé, on prendra le même que l’annuel plus bas
+
+    # Annuel : préférer 'calendar_df'
+    for key in ["calendar_df", "generated_calendar_df", "budget_calendar_df"]:
+        if df_annuel is None and key in top_candidates:
+            df_annuel = top_candidates[key]
+        if df_annuel is None:
+            for nk, v in nested_candidates.items():
+                if nk.endswith("." + key):
+                    df_annuel = v
+                    break
+
+    # Si modifié introuvable, utilise l’annuel (équivaut à “pas d’ajustements”)
+    if df_mod is None:
+        df_mod = df_annuel if _is_ok(df_annuel) else pd.DataFrame()
+
+    # Dernière sécurité
+    if not _is_ok(df_annuel):
         df_annuel = pd.DataFrame()
-    if not isinstance(df_mod, pd.DataFrame):
+    if not _is_ok(df_mod):
         df_mod = pd.DataFrame()
+
+    # Stocke la liste de ce qu'on a trouvé pour le panneau debug
+    st.session_state["_ab_found_calendars"] = {
+        "top_level": list(top_candidates.keys()),
+        "nested": list(nested_candidates.keys())
+    }
+
     return df_annuel.copy(), df_mod.copy()
+
 
 def _monthly_total(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     """Retourne Année, Mois_Num, Mois, Total (somme des colonnes prefixées)."""
@@ -239,6 +302,13 @@ def render_analyse_budgetaire_page():
     df_annuel, df_mod = _pick_calendar_base_and_modified()
     if df_annuel.empty:
         st.info("Budget non encore généré. Rendez-vous sur **Budget Annuel** pour générer le calendrier de coûts.")
+        # 🔎 Panneau debug pour comprendre pourquoi
+        found = st.session_state.get("_ab_found_calendars", {})
+        with st.expander("Debug — Clés candidates détectées"):
+            st.write("Top-level:", found.get("top_level"))
+            st.write("Dans budget_state/bs:", found.get("nested"))
+            # Montre aussi les clés de session pour repérage rapide
+            st.write("Clés présentes dans st.session_state :", list(st.session_state.keys()))
         return
 
     factu_df = load_facturation_dir(FACTU_AT_DIR)
