@@ -1,5 +1,5 @@
 # ui/pages/analyse_budgetaire.py
-from typing import Optional
+from typing import Optional, Dict
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -43,7 +43,6 @@ def _ensure_datetime(s, fmt="%d.%m.%Y"):
     return ser
 
 def _style_variance(val):
-    """Colorisation: rouge si dépassement (>0), vert si en-dessous (<0), gris si 0."""
     try:
         v = float(val)
         if v > 0:
@@ -64,6 +63,47 @@ def _style_variance_pct(val):
         return "color: #666;"
     except Exception:
         return ""
+
+# ==========================
+# Détection de l'année sélectionnée
+# ==========================
+
+def _find_selected_year() -> Optional[int]:
+    """
+    Cherche l'année de référence définie par la page Budget Annuel dans st.session_state.
+    Clés possibles (ajoute d'autres si besoin) :
+      - 'selected_year', 'budget_year', 'annee_budget', 'year', 'config_year'
+      - dans st.session_state['budget_state'] : mêmes variantes
+    """
+    candidates = ["selected_year", "budget_year", "annee_budget", "year", "config_year"]
+    # top-level
+    for k in candidates:
+        y = st.session_state.get(k)
+        try:
+            if 2010 <= int(y) <= 2100:
+                return int(y)
+        except Exception:
+            pass
+    # nested
+    for container_key in ("budget_state", "bs", "budget"):
+        sub = st.session_state.get(container_key)
+        if isinstance(sub, dict):
+            for k in candidates:
+                y = sub.get(k)
+                try:
+                    if 2010 <= int(y) <= 2100:
+                        return int(y)
+                except Exception:
+                    pass
+    return None
+
+def _filter_year(df: pd.DataFrame, year: Optional[int]) -> pd.DataFrame:
+    if df.empty or year is None or "Date" not in df.columns:
+        return df
+    w = df.copy()
+    w["Date"] = pd.to_datetime(w["Date"], errors="coerce")
+    w = w.dropna(subset=["Date"])
+    return w[w["Date"].dt.year == int(year)]
 
 # ==========================
 # Facturation (robuste)
@@ -158,6 +198,7 @@ def load_facturation_dir(dir_path: Path) -> pd.DataFrame:
         return pd.DataFrame(columns=["Date","Heures","Montant"])
 
     all_df = pd.concat(frames, ignore_index=True)
+    # Agrège par jour (si doublons)
     agg = (all_df.groupby("Date", as_index=False)[["Heures","Montant"]].sum())
     return agg
 
@@ -166,7 +207,7 @@ def load_facturation_dir(dir_path: Path) -> pd.DataFrame:
 # ==========================
 
 @st.cache_data(show_spinner=False)
-def _scan_budget_dfs_from_session():
+def _scan_budget_dfs_from_session() -> Dict[str, pd.DataFrame]:
     """
     Scanne st.session_state et ses sous-dicts usuels pour trouver des DataFrames budget.
     Retourne dict {label: df} où df contient 'Date' + colonnes 'Coût_'/'Heures_'.
@@ -177,12 +218,10 @@ def _scan_budget_dfs_from_session():
         )
 
     candidates = {}
-
     # Top-level
     for k, v in st.session_state.items():
         if _ok(v):
             candidates[k] = v
-
     # Sous-dictionnaires courants
     for container_key in ("budget_state", "bs", "budget"):
         sub = st.session_state.get(container_key)
@@ -190,19 +229,17 @@ def _scan_budget_dfs_from_session():
             for k, v in sub.items():
                 if _ok(v):
                     candidates[f"{container_key}.{k}"] = v
-
     return candidates
 
-def _pick_calendar_base_and_modified_interactive():
+def _pick_calendar_base_and_modified_interactive(year: Optional[int]):
     """
-    Permet de choisir explicitement Annuel et Modifié parmi les DFs détectés.
-    S'il n'y a qu'un seul candidat, on l'utilise pour Annuel ET Modifié (provisoirement).
-    Si deux candidats 'adjusted/after_needs' sont trouvés, ils sont présélectionnés comme Modifié.
+    Choix explicite Annuel/Modifié parmi les DFs détectés.
+    Filtre immédiatement chaque DF sur l'année choisie.
     """
     cands = _scan_budget_dfs_from_session()
     if not cands:
         st.session_state["_ab_found_calendars"] = {"detected": [], "reason": "aucun DF avec Date + Coût_/Heures_"}
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), []
 
     labels = list(cands.keys())
     st.session_state["_ab_found_calendars"] = {"detected": labels}
@@ -215,20 +252,19 @@ def _pick_calendar_base_and_modified_interactive():
                     return lab
         return fallback or (labels[0] if labels else None)
 
-    # Annuel : préfère 'calendar_df'
     annual_default = _preselect(labels, prefer=("calendar_df","generated_calendar_df","budget_calendar_df"), fallback=(labels[0] if labels else None))
-    # Modifié : préfère 'adjusted' / 'after_needs'
     modified_default = _preselect(labels, prefer=("calendar_df_adjusted","calendar_df_after_needs","calendar_df_mod"), fallback=annual_default)
 
     with st.expander("🔧 Sources des données (Annuel / Modifié)", expanded=False):
         sel_ann = st.selectbox("DataFrame Budget Annuel", labels, index=labels.index(annual_default) if annual_default in labels else 0, key="ab_sel_ann")
         sel_mod = st.selectbox("DataFrame Budget Modifié (Besoin Jour)", labels, index=labels.index(modified_default) if modified_default in labels else 0, key="ab_sel_mod")
 
-        # Résumé utile
         def _summary(df):
             w = df.copy()
             w["Date"] = pd.to_datetime(w["Date"], errors="coerce")
             w = w.dropna(subset=["Date"])
+            if year is not None:
+                w = w[w["Date"].dt.year == int(year)]
             cost_cols = [c for c in w.columns if isinstance(c, str) and c.startswith("Coût_")]
             hour_cols = [c for c in w.columns if isinstance(c, str) and c.startswith("Heures_")]
             s_cost = float(w[cost_cols].sum().sum()) if cost_cols else 0.0
@@ -240,20 +276,47 @@ def _pick_calendar_base_and_modified_interactive():
         st.caption(f"Annuel → {sel_ann}: {_summary(cands[sel_ann])}")
         st.caption(f"Modifié → {sel_mod}: {_summary(cands[sel_mod])}")
 
-    return cands[sel_ann].copy(), cands[sel_mod].copy()
+    # Filtre année tout de suite
+    df_ann = _filter_year(cands[sel_ann].copy(), year)
+    df_mod = _filter_year(cands[sel_mod].copy(), year)
+
+    # Avertit si ce sont exactement les mêmes objets (risque de confondre ann/mod)
+    if id(cands[sel_ann]) == id(cands[sel_mod]):
+        st.info("ℹ️ Annuel et Modifié pointent vers le **même DataFrame**. Choisis un DF différent pour 'Modifié' si tu attends des écarts.")
+
+    return df_ann, df_mod, labels
 
 # ==========================
 # Agrégations & écarts
 # ==========================
 
+def _budget_columns(df: pd.DataFrame, prefix: str):
+    """
+    Colonnes de budget à agréger :
+      - commencent par prefix ('Coût_' ou 'Heures_')
+      - exclure les totaux ('Total', 'Total_Mois', etc.) pour éviter le double comptage
+    """
+    cols = []
+    for c in df.columns:
+        if not isinstance(c, str):
+            continue
+        if not c.startswith(prefix):
+            continue
+        lc = c.lower()
+        if ("total" in lc) or ("_mois" in lc):
+            # Exclut Coût_Total, Coût_Total_Mois, Heures_Total, etc.
+            continue
+        cols.append(c)
+    return cols
+
 def _monthly_total(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
-    """Retourne Année, Mois_Num, Mois, Total (somme des colonnes prefixées)."""
+    """Retourne Année, Mois_Num, Mois, Total (somme des colonnes prefixées, sans 'Total*')."""
     if df.empty or "Date" not in df.columns:
         return pd.DataFrame(columns=["Année","Mois_Num","Mois","Total"])
     work = df.copy()
     work["Date"] = pd.to_datetime(work["Date"], errors="coerce")
     work = work.dropna(subset=["Date"])
-    cols = [c for c in work.columns if isinstance(c, str) and c.startswith(prefix)]
+    cols = _budget_columns(work, prefix)
     if not cols:
         return pd.DataFrame(columns=["Année","Mois_Num","Mois","Total"])
     for c in cols:
@@ -266,12 +329,13 @@ def _monthly_total(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     return out[["Année","Mois_Num","Mois","Total"]].sort_values(["Année","Mois_Num"])
 
 def _daily_series(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    """Série journalière Total = somme des colonnes budget (sans 'Total*')."""
     if df.empty or "Date" not in df.columns:
         return pd.DataFrame(columns=["Date","Total"])
     work = df.copy()
     work["Date"] = pd.to_datetime(work["Date"], errors="coerce")
     work = work.dropna(subset=["Date"])
-    cols = [c for c in work.columns if isinstance(c, str) and c.startswith(prefix)]
+    cols = _budget_columns(work, prefix)
     if not cols:
         return pd.DataFrame(columns=["Date","Total"])
     for c in cols:
@@ -283,16 +347,10 @@ def _daily_series(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     return ser
 
 def _variance_cols(df, col_ref, col_cmp, prefix):
-    """
-    Ajoute 2 colonnes:
-      - prefix+'_Ecart'      = col_cmp - col_ref (valeur)
-      - prefix+'_Ecart_pct'  = (col_cmp - col_ref) / col_ref, sécurisé
-    """
     out = df.copy()
     ref = out[col_ref].astype(float)
     cmpv = out[col_cmp].astype(float)
     out[prefix + "_Ecart"] = (cmpv - ref)
-    # évite div/0 : si ref==0 & cmp==0 -> 0 ; si ref==0 & cmp>0 -> 1.0 (100%)
     out[prefix + "_Ecart_pct"] = np.where(ref == 0,
                                           np.where(cmpv == 0, 0.0, 1.0),
                                           (cmpv - ref) / ref)
@@ -305,18 +363,45 @@ def _variance_cols(df, col_ref, col_cmp, prefix):
 def render_analyse_budgetaire_page():
     st.title("Analyse Budgétaire")
 
-    # ---- Sélection explicite des sources Annuel / Modifié (reprend Besoin Jour si choisi)
-    df_annuel, df_mod = _pick_calendar_base_and_modified_interactive()
+    # ---- 1) Année : lit celle de Budget Annuel, sinon propose une liste détectée
+    year_in_session = _find_selected_year()
+
+    # on détecte les bornes à partir des DFs disponibles (si déjà en session)
+    all_cands = _scan_budget_dfs_from_session()
+    years_detected = []
+    for df in all_cands.values():
+        if "Date" in df.columns:
+            d = pd.to_datetime(df["Date"], errors="coerce")
+            ys = d.dt.year.dropna().astype(int).unique().tolist()
+            years_detected.extend(ys)
+    years_detected = sorted(set([y for y in years_detected if 2010 <= y <= 2100]))
+
+    if years_detected:
+        default_year = year_in_session if (year_in_session in years_detected) else years_detected[0]
+        sel_year = st.selectbox("Année analysée", years_detected, index=years_detected.index(default_year), key="ab_year_select")
+    else:
+        sel_year = year_in_session  # peut être None
+        if sel_year is None:
+            st.info("Aucune année détectée pour l’instant. Dès que le budget sera généré, l’année apparaîtra ici.")
+            # on continue : les sections en dessous gèreront l'absence
+
+    # ---- 2) Sélection explicite des sources Annuel / Modifié (filtrées sur l’année)
+    df_annuel, df_mod, labels_found = _pick_calendar_base_and_modified_interactive(sel_year)
     if df_annuel.empty:
-        st.info("Budget non encore généré. Allez sur **Budget Annuel** pour générer le calendrier de coûts.")
+        st.info("Budget non encore généré pour l’année sélectionnée.")
         found = st.session_state.get("_ab_found_calendars", {})
         with st.expander("Debug — DFs détectés"):
             st.write("Candidats trouvés :", found.get("detected"))
             st.write("Clés présentes dans st.session_state :", list(st.session_state.keys()))
         return
 
-    # ---- Facturation (cachée & robuste)
-    factu_df = load_facturation_dir(FACTU_AT_DIR)
+    # ---- 3) Facturation
+    factu_all = load_facturation_dir(FACTU_AT_DIR)
+    if factu_all.empty:
+        factu_df = factu_all
+    else:
+        factu_all["Date"] = pd.to_datetime(factu_all["Date"], errors="coerce")
+        factu_df = factu_all[factu_all["Date"].dt.year == int(sel_year)] if sel_year is not None else factu_all
 
     tabs = st.tabs(["Synthèse (CHF)","Synthèse (Heures)","Courbes cumulées","Détails Mensuels"])
 
@@ -324,25 +409,21 @@ def render_analyse_budgetaire_page():
     # A) Synthèse (CHF) + écarts
     # ======================
     with tabs[0]:
-        st.subheader("Synthèse (CHF) — Prévu vs Modifié vs Réalisé")
+        st.subheader(f"Synthèse (CHF) — {sel_year} — Prévu vs Modifié vs Réalisé")
 
         ann_chf = _monthly_total(df_annuel, "Coût_")
         mod_chf = _monthly_total(df_mod, "Coût_")
         if ann_chf.empty:
             st.warning("Aucune colonne de coût (préfixe 'Coût_') détectée.")
         else:
-            # Réalisé (facturation) mensuel
             factu_month = pd.DataFrame(columns=["Année","Mois_Num","Total"])
             if not factu_df.empty and "Montant" in factu_df.columns:
                 f2 = factu_df.copy()
-                f2["Date"] = pd.to_datetime(f2["Date"], errors="coerce")
-                f2 = f2.dropna(subset=["Date"])
                 f2["Année"] = f2["Date"].dt.year.astype(int)
                 f2["Mois_Num"] = f2["Date"].dt.month.astype(int)
                 factu_month = f2.groupby(["Année","Mois_Num"], as_index=False)["Montant"].sum()
                 factu_month.rename(columns={"Montant":"Total"}, inplace=True)
 
-            # Assure types identiques pour la jointure
             for df_ in (ann_chf, mod_chf, factu_month):
                 if not df_.empty:
                     df_["Année"] = df_["Année"].astype(int)
@@ -353,20 +434,15 @@ def render_analyse_budgetaire_page():
             base.rename(columns={"Total":"Total_Reel"}, inplace=True)
             base["Total_Reel"] = base["Total_Reel"].fillna(0.0)
 
-            # Écarts
             base = _variance_cols(base, "Total_Annuel", "Total_Modifie", "Mod_vs_Ann")
             base = _variance_cols(base, "Total_Modifie", "Total_Reel",   "Reel_vs_Mod")
 
-            # KPIs
             k1, k2, k3 = st.columns(3)
             k1.metric("Budget Annuel (CHF)", _format_money_chf(base["Total_Annuel"].sum()))
             k2.metric("Budget Modifié (CHF)", _format_money_chf(base["Total_Modifie"].sum()))
             k3.metric("Facturation cumulée (CHF)", _format_money_chf(base["Total_Reel"].sum()))
 
             show = base.copy().sort_values(["Année","Mois_Num"])
-            show["Mod_vs_Ann_Ecart_pct"] = show["Mod_vs_Ann_Ecart_pct"].astype(float)
-            show["Reel_vs_Mod_Ecart_pct"] = show["Reel_vs_Mod_Ecart_pct"].astype(float)
-
             fmt = {
                 "Total_Annuel": _format_money_chf,
                 "Total_Modifie": _format_money_chf,
@@ -385,10 +461,9 @@ def render_analyse_budgetaire_page():
                       .format(fmt))
             st.dataframe(styler, use_container_width=True)
 
-            # Debug facturation
             with st.expander("🔎 Debug Facturation (CHF)"):
                 st.caption(f"FACTU_AT_DIR = {FACTU_AT_DIR}")
-                st.write("Lignes facturation (jour):", len(factu_df))
+                st.write("Lignes facturation (jour, année filtrée):", len(factu_df))
                 if not factu_df.empty:
                     st.dataframe(factu_df.head(10), use_container_width=True)
                 st.write("Lignes facturation (mois):", len(factu_month))
@@ -399,7 +474,7 @@ def render_analyse_budgetaire_page():
     # B) Synthèse (Heures) + écarts
     # ======================
     with tabs[1]:
-        st.subheader("Synthèse (Heures) — Prévu vs Modifié vs Réalisé")
+        st.subheader(f"Synthèse (Heures) — {sel_year} — Prévu vs Modifié vs Réalisé")
 
         ann_h = _monthly_total(df_annuel, "Heures_")
         mod_h = _monthly_total(df_mod, "Heures_")
@@ -409,8 +484,6 @@ def render_analyse_budgetaire_page():
             factu_month_h = pd.DataFrame(columns=["Année","Mois_Num","Total"])
             if not factu_df.empty and "Heures" in factu_df.columns:
                 f2 = factu_df.copy()
-                f2["Date"] = pd.to_datetime(f2["Date"], errors="coerce")
-                f2 = f2.dropna(subset=["Date"])
                 f2["Année"] = f2["Date"].dt.year.astype(int)
                 f2["Mois_Num"] = f2["Date"].dt.month.astype(int)
                 factu_month_h = f2.groupby(["Année","Mois_Num"], as_index=False)["Heures"].sum()
@@ -462,16 +535,14 @@ def render_analyse_budgetaire_page():
     # C) Courbes cumulées (journalier → cumul)
     # ======================
     with tabs[2]:
-        st.subheader("Courbes cumulées")
+        st.subheader(f"Courbes cumulées — {sel_year}")
 
         daily_chf_ann = _daily_series(df_annuel, "Coût_")
         daily_chf_mod = _daily_series(df_mod, "Coût_")
 
         factu_daily = pd.DataFrame(columns=["Date","Montant","Heures"])
         if not factu_df.empty:
-            factu_daily = factu_df.copy()
-            factu_daily["Date"] = pd.to_datetime(factu_daily["Date"], errors="coerce")
-            factu_daily = factu_daily.dropna(subset=["Date"]).sort_values("Date")
+            factu_daily = factu_df.copy().sort_values("Date")
 
         colA, colB = st.columns(2)
 
@@ -529,9 +600,8 @@ def render_analyse_budgetaire_page():
     # D) Détails Mensuels (lecture par type)
     # ======================
     with tabs[3]:
-        st.subheader("Détails Mensuels")
+        st.subheader(f"Détails Mensuels — {sel_year}")
 
-        # options à partir du DF annuel (ou modifié si besoin)
         month_opts = (_monthly_total(df_annuel, "Coût_")[["Année","Mois_Num","Mois"]]
                       .drop_duplicates()
                       .sort_values(["Année","Mois_Num"])
@@ -552,7 +622,7 @@ def render_analyse_budgetaire_page():
             work = df.copy()
             work["Date"] = pd.to_datetime(work["Date"], errors="coerce")
             work = work.dropna(subset=["Date"])
-            cols = [c for c in work.columns if isinstance(c, str) and c.startswith(prefix)]
+            cols = _budget_columns(work, prefix)
             if not cols:
                 return pd.DataFrame()
             for c in cols:
