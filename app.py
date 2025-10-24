@@ -15,6 +15,7 @@ from core.budget import generate_budget_state
 from core.data_loader import load_pax_data
 from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
+from utils.async_loader import start_pax_loading, check_pax_loading_status, get_pax_loading_info
 from ui.components import show_help_dialog, planning_editor_ui
 
 # =================== Configuration initiale ===================
@@ -30,40 +31,13 @@ if 'budget_state' not in st.session_state:
 if 'show_help_dialog' not in st.session_state:
     st.session_state.show_help_dialog = False
 
-# =================== Chargement automatique des données PAX ===================
-if st.session_state.data_loaded and 'pax_data_status' not in st.session_state:
-    full_pax_data, overall_min_date, overall_max_date = load_pax_data(
-        PAX_DATA_FILE_PATH, "Passagers"
-    )
+# =================== Initialisation du chargement PAX ===================
+# Initialiser l'état du chargement PAX si nécessaire
+if 'pax_loading_status' not in st.session_state:
+    st.session_state.pax_loading_status = 'idle'
 
-    st.session_state.pax_data_status = "attempted"
-
-    if not full_pax_data.empty:
-        st.session_state.pax_overall_min_date = overall_min_date
-        st.session_state.pax_overall_max_date = overall_max_date
-
-        today = dt.date.today()
-        historical_data = full_pax_data[full_pax_data.index.date < today].copy()
-        forecast_data = full_pax_data[full_pax_data.index.date >= today].copy()
-
-        if not historical_data.empty:
-            st.session_state.pax_historical_data = historical_data
-            st.session_state.pax_historical_min_date = historical_data.index.min().date()
-            st.session_state.pax_historical_max_date = historical_data.index.max().date()
-            st.session_state.pax_historical_status = "loaded"
-        else:
-            st.session_state.pax_historical_status = "no_data_found"
-
-        if not forecast_data.empty:
-            st.session_state.pax_forecast_data = forecast_data
-            st.session_state.pax_forecast_min_date = forecast_data.index.min().date()
-            st.session_state.pax_forecast_max_date = forecast_data.index.max().date()
-            st.session_state.pax_forecast_status = "loaded"
-        else:
-            st.session_state.pax_forecast_status = "no_data_found"
-    else:
-        st.session_state.pax_historical_status = "not_loaded"
-        st.session_state.pax_forecast_status = "not_loaded"
+# Note: Le chargement automatique PAX a été désactivé au profit du chargement manuel
+# via le bouton dans la sidebar pour ne pas bloquer l'application au démarrage
 
 # =================== Affichage principal ===================
 render_gva_header()
@@ -125,6 +99,75 @@ else:
         # Bouton Mode d'emploi
         if st.button("❔ Mode d'emploi", use_container_width=True):
             show_help_dialog()
+
+        st.divider()
+
+        # =================== Section Chargement PAX ===================
+        st.subheader("Données PAX")
+
+        # Vérifier l'état du chargement
+        loading_status = check_pax_loading_status()
+        pax_info = get_pax_loading_info()
+
+        if loading_status == 'idle':
+            # Bouton pour lancer le chargement
+            if st.button("🔄 Lancer le chargement PAX", use_container_width=True, type="secondary"):
+                if PAX_DATA_FILE_PATH.exists():
+                    start_pax_loading(PAX_DATA_FILE_PATH)
+                    st.toast("Chargement PAX démarré en arrière-plan...", icon="🔄")
+                    st.rerun()
+                else:
+                    st.error(f"Fichier non trouvé : {PAX_DATA_FILE_PATH}")
+
+        elif loading_status == 'loading':
+            # Afficher l'état de chargement avec barre de progression
+            elapsed = pax_info.get('elapsed', 0)
+            st.info(f"⏳ Chargement en cours... ({elapsed:.1f}s)")
+
+            # Barre de progression indéterminée
+            progress_bar = st.progress(0)
+            # Animation de la barre (simule un chargement)
+            import time
+            progress_value = int((elapsed * 10) % 100)
+            progress_bar.progress(progress_value)
+
+            # Auto-refresh toutes les 0.5 secondes
+            time.sleep(0.5)
+            st.rerun()
+
+        elif loading_status == 'success':
+            # Afficher le succès
+            st.success("✅ Données PAX chargées")
+
+            # Afficher les statistiques
+            if pax_info.get('forecast_status') == 'loaded':
+                min_date = st.session_state.get('pax_forecast_min_date')
+                max_date = st.session_state.get('pax_forecast_max_date')
+                st.caption(f"📊 Forecast : {min_date} → {max_date}")
+
+            if pax_info.get('historical_status') == 'loaded':
+                min_date = st.session_state.get('pax_historical_min_date')
+                max_date = st.session_state.get('pax_historical_max_date')
+                st.caption(f"📈 Historique : {min_date} → {max_date}")
+
+            # Bouton pour recharger
+            if st.button("🔄 Recharger", use_container_width=True, type="secondary"):
+                # Réinitialiser l'état
+                st.session_state.pax_loading_status = 'idle'
+                st.session_state.pop('pax_data_status', None)
+                st.toast("Prêt à recharger les données", icon="🔄")
+                st.rerun()
+
+        elif loading_status == 'error':
+            # Afficher l'erreur
+            error_msg = pax_info.get('error', 'Erreur inconnue')
+            st.error(f"❌ Erreur de chargement")
+            st.caption(f"Détails : {error_msg}")
+
+            # Bouton pour réessayer
+            if st.button("🔄 Réessayer", use_container_width=True, type="secondary"):
+                st.session_state.pax_loading_status = 'idle'
+                st.rerun()
 
         st.divider()
         st.subheader("Exporter le Scénario")
