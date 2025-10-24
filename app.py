@@ -130,8 +130,30 @@ else:
 
             elif loading_status == 'error':
                 error_msg = pax_info.get('error', 'Erreur inconnue')
-                st.error(f"❌ Erreur de chargement")
-                st.caption(f"Détails : {error_msg}")
+            
+                # Drapeau de masquage
+                if "pax_error_dismissed" not in st.session_state:
+                    st.session_state.pax_error_dismissed = False
+            
+                if not st.session_state.pax_error_dismissed:
+                    with st.container(border=True):
+                        st.error("❌ Erreur de chargement")
+                        st.caption(f"Détails : {error_msg}")
+                        cols = st.columns([1,1])
+                        with cols[0]:
+                            if st.button("Masquer", key="hide_pax_error_btn"):
+                                st.session_state.pax_error_dismissed = True
+                        with cols[1]:
+                            if st.button("Voir tracebacks", key="show_tracebacks_btn"):
+                                tb = pax_info.get('tracebacks', {})
+                                if tb:
+                                    with st.expander("Traceback (debug)"):
+                                        for k, v in tb.items():
+                                            st.markdown(f"**{k}**")
+                                            st.code(v or "—", language="python")
+                else:
+                    st.caption("Erreur de chargement masquée (cliquez Recharger pour réessayer).")
+
 
         # Afficher le fragment de polling
         pax_loading_status_fragment()
