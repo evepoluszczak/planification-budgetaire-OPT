@@ -89,7 +89,7 @@ else:
         page = st.radio(
             "Navigation",
             ["Configuration", "Planification", "Budget Annuel", "Besoin Jour",
-             "Comparaison Historique", "Simulateur Objectif"],
+             "Comparaison Historique", "Simulateur Objectif", "Analyse Budgétaire"],
             label_visibility="hidden"
         )
 
@@ -286,3 +286,8 @@ else:
     elif page == "Simulateur Objectif":
         from ui.pages.simulateur_objectif import render_simulateur_objectif_page
         render_simulateur_objectif_page()
+
+    elif page == "Analyse Budgétaire":
+        from ui.pages.analyse_budgetaire import render_analyse_budgetaire_page
+        render_analyse_budgetaire_page()
+
