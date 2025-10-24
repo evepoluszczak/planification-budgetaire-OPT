@@ -1,7 +1,3 @@
-"""
-Application Streamlit - Planificateur Budgétaire OPT
-Version refactorisée et modulaire
-"""
 import datetime as dt
 import re
 import pandas as pd
