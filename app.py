@@ -88,8 +88,7 @@ else:
 
         page = st.radio(
             "Navigation",
-            ["Configuration", "Planification", "Budget Annuel", "Besoin Jour",
-             "Comparaison Historique", "Simulateur Objectif", "Analyse Budgétaire"],
+            [ "Analyse Budgétaire"],
             label_visibility="hidden"
         )
 
