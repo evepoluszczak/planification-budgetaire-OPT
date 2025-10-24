@@ -84,36 +84,36 @@ else:
 
     # Sidebar : Navigation et Export
     with st.sidebar:
-    st.title("Navigation")
-
-    # Initialiser la page sélectionnée si nécessaire
-    if 'selected_page' not in st.session_state:
-        st.session_state.selected_page = "Configuration"
-
-    # Configuration Générale
-    st.markdown("#### ⚙️ Configuration Générale")
-    if st.button("📋 Configuration", use_container_width=True, 
-                 type="primary" if st.session_state.selected_page == "Configuration" else "secondary"):
-        st.session_state.selected_page = "Configuration"
-    if st.button("📅 Planification", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Planification" else "secondary"):
-        st.session_state.selected_page = "Planification"
-
-    st.divider()
-
-    # Gestion du Budget
-    st.markdown("#### 💰 Gestion du Budget")
-    if st.button("💵 Budget Annuel", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Budget Annuel" else "secondary"):
-        st.session_state.selected_page = "Budget Annuel"
-    if st.button("📊 Besoin Jour", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Besoin Jour" else "secondary"):
-        st.session_state.selected_page = "Besoin Jour"
-    if st.button("📈 Analyse Budgétaire", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Analyse Budgétaire" else "secondary"):
-        st.session_state.selected_page = "Analyse Budgétaire"
-
-    st.divider()
+        st.title("Navigation")
+    
+        # Initialiser la page sélectionnée si nécessaire
+        if 'selected_page' not in st.session_state:
+            st.session_state.selected_page = "Configuration"
+    
+        # Configuration Générale
+        st.markdown("#### ⚙️ Configuration Générale")
+        if st.button("📋 Configuration", use_container_width=True, 
+                     type="primary" if st.session_state.selected_page == "Configuration" else "secondary"):
+            st.session_state.selected_page = "Configuration"
+        if st.button("📅 Planification", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Planification" else "secondary"):
+            st.session_state.selected_page = "Planification"
+    
+        st.divider()
+    
+        # Gestion du Budget
+        st.markdown("#### 💰 Gestion du Budget")
+        if st.button("💵 Budget Annuel", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Budget Annuel" else "secondary"):
+            st.session_state.selected_page = "Budget Annuel"
+        if st.button("📊 Besoin Jour", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Besoin Jour" else "secondary"):
+            st.session_state.selected_page = "Besoin Jour"
+        if st.button("📈 Analyse Budgétaire", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Analyse Budgétaire" else "secondary"):
+            st.session_state.selected_page = "Analyse Budgétaire"
+    
+        st.divider()
 
     # Outils
     st.markdown("#### 🔧 Outils")
