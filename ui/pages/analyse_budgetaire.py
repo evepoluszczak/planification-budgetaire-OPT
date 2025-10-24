@@ -1,7 +1,6 @@
 # ui/pages/analyse_budgetaire.py
-import datetime as dt
-from pathlib import Path
 from typing import Optional
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -25,6 +24,12 @@ def _format_hours(v):
     except Exception:
         return v
 
+def _format_pct(v):
+    try:
+        return f"{float(v)*100:,.1f}%".replace(",", " ")
+    except Exception:
+        return v
+
 def _month_fr(n):
     return {
         1:"Janvier",2:"Février",3:"Mars",4:"Avril",5:"Mai",6:"Juin",
@@ -37,8 +42,31 @@ def _ensure_datetime(s, fmt="%d.%m.%Y"):
         ser = pd.to_datetime(s, format=fmt, errors="coerce")
     return ser
 
+def _style_variance(val):
+    """Colorisation: rouge si dépassement (>0), vert si en-dessous (<0), gris si 0."""
+    try:
+        v = float(val)
+        if v > 0:
+            return "background-color: rgba(255, 0, 0, 0.15); color: #8a0000;"
+        if v < 0:
+            return "background-color: rgba(0, 128, 0, 0.12); color: #0b5;"
+        return "color: #666;"
+    except Exception:
+        return ""
+
+def _style_variance_pct(val):
+    try:
+        v = float(val)
+        if v > 0.0:
+            return "background-color: rgba(255, 0, 0, 0.10); color: #8a0000;"
+        if v < 0.0:
+            return "background-color: rgba(0, 128, 0, 0.08); color: #0b5;"
+        return "color: #666;"
+    except Exception:
+        return ""
+
 # ==========================
-# Chargement facturation (robuste)
+# Facturation (robuste)
 # ==========================
 
 def _read_any(path: Path) -> pd.DataFrame:
@@ -46,7 +74,6 @@ def _read_any(path: Path) -> pd.DataFrame:
         try:
             return pd.read_excel(path, engine="openpyxl", header=None)
         except Exception:
-            # parfois fichier renommé .xlsx mais c'est un CSV
             try:
                 return pd.read_csv(path, sep=";", header=None, encoding="utf-8")
             except Exception:
@@ -59,31 +86,21 @@ def _read_any(path: Path) -> pd.DataFrame:
     else:
         return pd.DataFrame()
 
-def _detect_header_row(df: pd.DataFrame, candidates=("Date ouvrable", "Heures", "Montant")) -> Optional[int]:
-    """Trouve la ligne d'entête quand elle est sur la 3e ligne, etc."""
+def _detect_header_row(df: pd.DataFrame, candidates=("Date ouvrable","Heures","Montant")) -> Optional[int]:
     max_probe = min(10, len(df))
     for i in range(max_probe):
         row_vals = df.iloc[i].astype(str).str.strip().tolist()
-        # on exige au moins les 2 premières colonnes potentielles (date/heure)
         if all(any(cand.lower() in str(v).lower() for v in row_vals) for cand in candidates[:2]):
             return i
     return None
 
 def load_facturation_dir(dir_path: Path) -> pd.DataFrame:
-    """
-    Charge toutes les factures dans FACTU_AT_DIR en détectant l'entête et en consolidant.
-    Colonnes reconnues (si présentes) :
-      - Date ouvrable / Date / Jour
-      - Heures
-      - Montant / Total / CHF
-    Retourne DataFrame avec colonnes: Date (date), Heures (float), Montant (float).
-    """
     if (not dir_path) or (not Path(dir_path).exists()):
-        return pd.DataFrame(columns=["Date", "Heures", "Montant"])
+        return pd.DataFrame(columns=["Date","Heures","Montant"])
 
-    files = sorted([p for p in Path(dir_path).glob("**/*") if p.suffix.lower() in (".xlsx", ".xls", ".csv")])
+    files = sorted([p for p in Path(dir_path).glob("**/*") if p.suffix.lower() in (".xlsx",".xls",".csv")])
     if not files:
-        return pd.DataFrame(columns=["Date", "Heures", "Montant"])
+        return pd.DataFrame(columns=["Date","Heures","Montant"])
 
     frames = []
     for f in files:
@@ -96,21 +113,17 @@ def load_facturation_dir(dir_path: Path) -> pd.DataFrame:
             df.columns = df.iloc[0].astype(str).str.strip()
             df = df.iloc[1:].reset_index(drop=True)
         else:
-            # fallback: première ligne comme header
             df = raw.copy()
             df.columns = df.iloc[0].astype(str).str.strip()
             df = df.iloc[1:].reset_index(drop=True)
 
-        # mapping colonnes
         col_date = next((c for c in df.columns if str(c).lower().startswith("date")), None)
         col_heures = next((c for c in df.columns if "heure" in str(c).lower()), None)
         col_montant = next((c for c in df.columns if any(k in str(c).lower() for k in ["montant","total","chf","amount"])), None)
 
         if not col_date:
-            if "Date ouvrable" in df.columns:
-                col_date = "Date ouvrable"
-            elif "Jour" in df.columns:
-                col_date = "Jour"
+            if "Date ouvrable" in df.columns: col_date = "Date ouvrable"
+            elif "Jour" in df.columns: col_date = "Jour"
 
         out = pd.DataFrame()
         if col_date:
@@ -137,54 +150,53 @@ def load_facturation_dir(dir_path: Path) -> pd.DataFrame:
             frames.append(out)
 
     if not frames:
-        return pd.DataFrame(columns=["Date", "Heures", "Montant"])
+        return pd.DataFrame(columns=["Date","Heures","Montant"])
 
     all_df = pd.concat(frames, ignore_index=True)
     agg = (all_df.groupby("Date", as_index=False)[["Heures","Montant"]].sum())
     return agg
 
-
 # ==========================
 # Extraction Budget & Modifié
 # ==========================
 
-def _pick_calendar_df() -> pd.DataFrame:
+def _pick_calendar_base_and_modified():
     """
-    Cherche le calendrier de coût généré (budget annuel).
-    Attendus: colonnes Date + Coût_* (+ Heures_* si dispo).
+    Renvoie (df_annuel, df_modifie).
+    Par convention:
+      - Annuel   = st.session_state['calendar_df'] (prévision)
+      - Modifié  = st.session_state['calendar_df_adjusted'] si présent, sinon = Annuel
     """
-    for key in ("calendar_df_adjusted", "calendar_df"):
-        df = st.session_state.get(key)
-        if isinstance(df, pd.DataFrame) and (not df.empty) and ("Date" in df.columns):
-            return df.copy()
-    return pd.DataFrame()
+    df_annuel = st.session_state.get("calendar_df")
+    df_mod = st.session_state.get("calendar_df_adjusted")
+    if isinstance(df_annuel, pd.DataFrame) and (df_mod is None):
+        df_mod = df_annuel
+    if not isinstance(df_annuel, pd.DataFrame):
+        df_annuel = pd.DataFrame()
+    if not isinstance(df_mod, pd.DataFrame):
+        df_mod = pd.DataFrame()
+    return df_annuel.copy(), df_mod.copy()
 
-def _monthly_pivot(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+def _monthly_total(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    """Retourne Année, Mois_Num, Mois, Total (somme des colonnes prefixées)."""
     if df.empty or "Date" not in df.columns:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["Année","Mois_Num","Mois","Total"])
     work = df.copy()
     work["Date"] = pd.to_datetime(work["Date"], errors="coerce")
     work = work.dropna(subset=["Date"])
     cols = [c for c in work.columns if isinstance(c, str) and c.startswith(prefix)]
     if not cols:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["Année","Mois_Num","Mois","Total"])
     for c in cols:
         work[c] = pd.to_numeric(work[c], errors="coerce").fillna(0.0)
     work["Année"] = work["Date"].dt.year
     work["Mois_Num"] = work["Date"].dt.month
     work["Mois"] = work["Mois_Num"].map(_month_fr) + " " + work["Année"].astype(str)
-    long_ = work.melt(id_vars=["Année","Mois_Num","Mois"], value_vars=cols,
-                      var_name="Catégorie", value_name="Valeur")
-    if prefix:
-        long_["Catégorie"] = long_["Catégorie"].str.replace(prefix, "", regex=False)
-    monthly = (long_.groupby(["Année","Mois_Num","Mois","Catégorie"], as_index=False)["Valeur"].sum())
-    pivot = (monthly.pivot(index=["Année","Mois_Num","Mois"], columns="Catégorie", values="Valeur")
-                     .fillna(0.0).reset_index().sort_values(["Année","Mois_Num"]))
-    # Catégorie 'Mois' déjà triée via Année/Mois_Num
-    return pivot
+    out = work.groupby(["Année","Mois_Num","Mois"], as_index=False)[cols].sum()
+    out["Total"] = out[cols].sum(axis=1)
+    return out[["Année","Mois_Num","Mois","Total"]].sort_values(["Année","Mois_Num"])
 
 def _daily_series(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
-    """retourne Date + Total (somme de colonnes prefixées)"""
     if df.empty or "Date" not in df.columns:
         return pd.DataFrame(columns=["Date","Total"])
     work = df.copy()
@@ -201,6 +213,22 @@ def _daily_series(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
            .sort_values("Date"))
     return ser
 
+def _variance_cols(df, col_ref, col_cmp, prefix):
+    """
+    Ajoute 2 colonnes:
+      - prefix+'_Ecart'      = col_cmp - col_ref (valeur)
+      - prefix+'_Ecart_pct'  = (col_cmp - col_ref) / col_ref, sécurisé
+    """
+    out = df.copy()
+    ref = out[col_ref].astype(float)
+    cmpv = out[col_cmp].astype(float)
+    out[prefix + "_Ecart"] = (cmpv - ref)
+    # évite div/0 : si ref==0 & cmp==0 -> 0 ; si ref==0 & cmp>0 -> 1.0 (100%)
+    out[prefix + "_Ecart_pct"] = np.where(ref == 0,
+                                          np.where(cmpv == 0, 0.0, 1.0),
+                                          (cmpv - ref) / ref)
+    return out
+
 # ==========================
 # Page renderer
 # ==========================
@@ -208,112 +236,136 @@ def _daily_series(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
 def render_analyse_budgetaire_page():
     st.title("Analyse Budgétaire")
 
-    # Sources
-    calendar_df = _pick_calendar_df()
-    factu_df = load_facturation_dir(FACTU_AT_DIR)
-
-    if calendar_df.empty:
+    df_annuel, df_mod = _pick_calendar_base_and_modified()
+    if df_annuel.empty:
         st.info("Budget non encore généré. Rendez-vous sur **Budget Annuel** pour générer le calendrier de coûts.")
         return
 
-    tabs = st.tabs(["Synthèse (CHF)", "Synthèse (Heures)", "Courbes cumulées", "Détails Mensuels"])
+    factu_df = load_facturation_dir(FACTU_AT_DIR)
+
+    tabs = st.tabs(["Synthèse (CHF)","Synthèse (Heures)","Courbes cumulées","Détails Mensuels"])
 
     # ======================
-    # A) Synthèse (CHF)
+    # A) Synthèse (CHF) + écarts
     # ======================
     with tabs[0]:
-        st.subheader("Synthèse (CHF)")
+        st.subheader("Synthèse (CHF) — Prévu vs Modifié vs Réalisé")
 
-        monthly_chf = _monthly_pivot(calendar_df, "Coût_")
-        if monthly_chf.empty:
+        ann_chf = _monthly_total(df_annuel, "Coût_")
+        mod_chf = _monthly_total(df_mod, "Coût_")
+        if ann_chf.empty:
             st.warning("Aucune colonne de coût (préfixe 'Coût_') détectée.")
         else:
-            chf_cols = [c for c in monthly_chf.columns if c not in ("Année","Mois_Num","Mois")]
-            monthly_chf["Budget_Annuel_CHF"] = monthly_chf[chf_cols].sum(axis=1)
-            monthly_chf["Budget_Modifié_CHF"] = monthly_chf["Budget_Annuel_CHF"]  # adapte si tu as une source distincte
-
+            # Réalisé (facturation) mensuel
+            factu_month = pd.DataFrame(columns=["Année","Mois_Num","Total"])
             if not factu_df.empty and "Montant" in factu_df.columns:
-                factu_df2 = factu_df.copy()
-                factu_df2["Date"] = pd.to_datetime(factu_df2["Date"], errors="coerce")
-                factu_df2 = factu_df2.dropna(subset=["Date"])
-                factu_df2["Année"] = factu_df2["Date"].dt.year
-                factu_df2["Mois_Num"] = factu_df2["Date"].dt.month
-                factu_month = (factu_df2.groupby(["Année","Mois_Num"], as_index=False)["Montant"].sum())
-                monthly_chf = monthly_chf.merge(factu_month, on=["Année","Mois_Num"], how="left")
-                monthly_chf["Montant"] = monthly_chf["Montant"].fillna(0.0)
-                monthly_chf["Facturation_CHF"] = monthly_chf["Montant"]
-                monthly_chf = monthly_chf.drop(columns=["Montant"])
-            else:
-                monthly_chf["Facturation_CHF"] = 0.0
+                f2 = factu_df.copy()
+                f2["Date"] = pd.to_datetime(f2["Date"], errors="coerce")
+                f2 = f2.dropna(subset=["Date"])
+                f2["Année"] = f2["Date"].dt.year
+                f2["Mois_Num"] = f2["Date"].dt.month
+                factu_month = f2.groupby(["Année","Mois_Num"], as_index=False)["Montant"].sum()
+                factu_month.rename(columns={"Montant":"Total"}, inplace=True)
 
+            base = ann_chf.merge(mod_chf, on=["Année","Mois_Num","Mois"], how="outer", suffixes=("_Annuel","_Modifie")).fillna(0.0)
+            base = base.merge(factu_month, on=["Année","Mois_Num"], how="left")
+            base.rename(columns={"Total":"Total_Reel"}, inplace=True)
+            base["Total_Reel"] = base["Total_Reel"].fillna(0.0)
+
+            # Écarts (Modifié vs Annuel) puis (Réalisé vs Modifié)
+            base = _variance_cols(base, "Total_Annuel", "Total_Modifie", "Mod_vs_Ann")
+            base = _variance_cols(base, "Total_Modifie", "Total_Reel",   "Reel_vs_Mod")
+
+            # KPIs (arrondi sup)
             k1, k2, k3 = st.columns(3)
-            k1.metric("Budget Annuel (CHF)", _format_money_chf(monthly_chf["Budget_Annuel_CHF"].sum()))
-            k2.metric("Budget Modifié (CHF)", _format_money_chf(monthly_chf["Budget_Modifié_CHF"].sum()))
-            k3.metric("Facturation cumulée (CHF)", _format_money_chf(monthly_chf["Facturation_CHF"].sum()))
+            k1.metric("Budget Annuel (CHF)", _format_money_chf(base["Total_Annuel"].sum()))
+            k2.metric("Budget Modifié (CHF)", _format_money_chf(base["Total_Modifie"].sum()))
+            k3.metric("Facturation cumulée (CHF)", _format_money_chf(base["Total_Reel"].sum()))
 
-            show_cols = ["Mois", "Budget_Annuel_CHF", "Budget_Modifié_CHF", "Facturation_CHF"]
-            df_display = monthly_chf[show_cols].copy()
-            st.dataframe(
-                df_display.style.format({
-                    "Budget_Annuel_CHF": _format_money_chf,
-                    "Budget_Modifié_CHF": _format_money_chf,
-                    "Facturation_CHF": _format_money_chf
-                }),
-                use_container_width=True
-            )
+            show = base.copy().sort_values(["Année","Mois_Num"])
+            show["Mod_vs_Ann_Ecart_pct"] = show["Mod_vs_Ann_Ecart_pct"].astype(float)
+            show["Reel_vs_Mod_Ecart_pct"] = show["Reel_vs_Mod_Ecart_pct"].astype(float)
+
+            # Styling & formats
+            fmt = {
+                "Total_Annuel": _format_money_chf,
+                "Total_Modifie": _format_money_chf,
+                "Total_Reel": _format_money_chf,
+                "Mod_vs_Ann_Ecart": _format_money_chf,
+                "Reel_vs_Mod_Ecart": _format_money_chf,
+                "Mod_vs_Ann_Ecart_pct": _format_pct,
+                "Reel_vs_Mod_Ecart_pct": _format_pct,
+            }
+            styler = (show[["Mois","Total_Annuel","Total_Modifie","Total_Reel",
+                            "Mod_vs_Ann_Ecart","Mod_vs_Ann_Ecart_pct",
+                            "Reel_vs_Mod_Ecart","Reel_vs_Mod_Ecart_pct"]]
+                      .style
+                      .applymap(_style_variance, subset=["Mod_vs_Ann_Ecart","Reel_vs_Mod_Ecart"])
+                      .applymap(_style_variance_pct, subset=["Mod_vs_Ann_Ecart_pct","Reel_vs_Mod_Ecart_pct"])
+                      .format(fmt))
+            st.dataframe(styler, use_container_width=True)
 
     # ======================
-    # B) Synthèse (Heures)
+    # B) Synthèse (Heures) + écarts
     # ======================
     with tabs[1]:
-        st.subheader("Synthèse (Heures)")
+        st.subheader("Synthèse (Heures) — Prévu vs Modifié vs Réalisé")
 
-        monthly_h = _monthly_pivot(calendar_df, "Heures_")
-        if monthly_h.empty:
+        ann_h = _monthly_total(df_annuel, "Heures_")
+        mod_h = _monthly_total(df_mod, "Heures_")
+        if ann_h.empty:
             st.info("Aucune colonne d'heures (préfixe 'Heures_') détectée.")
         else:
-            hour_cols = [c for c in monthly_h.columns if c not in ("Année","Mois_Num","Mois")]
-            monthly_h["Budget_Annuel_h"] = monthly_h[hour_cols].sum(axis=1)
-            monthly_h["Budget_Modifié_h"] = monthly_h["Budget_Annuel_h"]  # adapte si source distincte
-
+            factu_month_h = pd.DataFrame(columns=["Année","Mois_Num","Total"])
             if not factu_df.empty and "Heures" in factu_df.columns:
-                factu_df2 = factu_df.copy()
-                factu_df2["Date"] = pd.to_datetime(factu_df2["Date"], errors="coerce")
-                factu_df2 = factu_df2.dropna(subset=["Date"])
-                factu_df2["Année"] = factu_df2["Date"].dt.year
-                factu_df2["Mois_Num"] = factu_df2["Date"].dt.month
-                factu_month = (factu_df2.groupby(["Année","Mois_Num"], as_index=False)["Heures"].sum())
-                monthly_h = monthly_h.merge(factu_month, on=["Année","Mois_Num"], how="left")
-                monthly_h["Heures"] = monthly_h["Heures"].fillna(0.0)
-                monthly_h["Heures_facturées"] = monthly_h["Heures"]
-                monthly_h = monthly_h.drop(columns=["Heures"])
-            else:
-                monthly_h["Heures_facturées"] = 0.0
+                f2 = factu_df.copy()
+                f2["Date"] = pd.to_datetime(f2["Date"], errors="coerce")
+                f2 = f2.dropna(subset=["Date"])
+                f2["Année"] = f2["Date"].dt.year
+                f2["Mois_Num"] = f2["Date"].dt.month
+                factu_month_h = f2.groupby(["Année","Mois_Num"], as_index=False)["Heures"].sum()
+                factu_month_h.rename(columns={"Heures":"Total"}, inplace=True)
+
+            base = ann_h.merge(mod_h, on=["Année","Mois_Num","Mois"], how="outer", suffixes=("_Annuel","_Modifie")).fillna(0.0)
+            base = base.merge(factu_month_h, on=["Année","Mois_Num"], how="left")
+            base.rename(columns={"Total":"Total_Reel"}, inplace=True)
+            base["Total_Reel"] = base["Total_Reel"].fillna(0.0)
+
+            base = _variance_cols(base, "Total_Annuel", "Total_Modifie", "Mod_vs_Ann")
+            base = _variance_cols(base, "Total_Modifie", "Total_Reel",   "Reel_vs_Mod")
 
             k1, k2, k3 = st.columns(3)
-            k1.metric("Budget Annuel (h)", _format_hours(monthly_h["Budget_Annuel_h"].sum()))
-            k2.metric("Budget Modifié (h)", _format_hours(monthly_h["Budget_Modifié_h"].sum()))
-            k3.metric("Heures facturées (h)", _format_hours(monthly_h["Heures_facturées"].sum()))
+            k1.metric("Budget Annuel (h)", _format_hours(base["Total_Annuel"].sum()))
+            k2.metric("Budget Modifié (h)", _format_hours(base["Total_Modifie"].sum()))
+            k3.metric("Heures facturées (h)", _format_hours(base["Total_Reel"].sum()))
 
-            show_cols = ["Mois", "Budget_Annuel_h", "Budget_Modifié_h", "Heures_facturées"]
-            df_display = monthly_h[show_cols].copy()
-            st.dataframe(
-                df_display.style.format({
-                    "Budget_Annuel_h": _format_hours,
-                    "Budget_Modifié_h": _format_hours,
-                    "Heures_facturées": _format_hours
-                }),
-                use_container_width=True
-            )
+            show = base.copy().sort_values(["Année","Mois_Num"])
+            fmt = {
+                "Total_Annuel": _format_hours,
+                "Total_Modifie": _format_hours,
+                "Total_Reel": _format_hours,
+                "Mod_vs_Ann_Ecart": _format_hours,
+                "Reel_vs_Mod_Ecart": _format_hours,
+                "Mod_vs_Ann_Ecart_pct": _format_pct,
+                "Reel_vs_Mod_Ecart_pct": _format_pct,
+            }
+            styler = (show[["Mois","Total_Annuel","Total_Modifie","Total_Reel",
+                            "Mod_vs_Ann_Ecart","Mod_vs_Ann_Ecart_pct",
+                            "Reel_vs_Mod_Ecart","Reel_vs_Mod_Ecart_pct"]]
+                      .style
+                      .applymap(_style_variance, subset=["Mod_vs_Ann_Ecart","Reel_vs_Mod_Ecart"])
+                      .applymap(_style_variance_pct, subset=["Mod_vs_Ann_Ecart_pct","Reel_vs_Mod_Ecart_pct"])
+                      .format(fmt))
+            st.dataframe(styler, use_container_width=True)
 
     # ======================
-    # C) Courbes cumulées
+    # C) Courbes cumulées (journalier → cumul)
     # ======================
     with tabs[2]:
-        st.subheader("Courbes cumulées (journalier → cumul)")
+        st.subheader("Courbes cumulées")
 
-        daily_chf = _daily_series(calendar_df, "Coût_")
-        daily_h = _daily_series(calendar_df, "Heures_")
+        daily_chf_ann = _daily_series(df_annuel, "Coût_")
+        daily_chf_mod = _daily_series(df_mod, "Coût_")
 
         factu_daily = pd.DataFrame(columns=["Date","Montant","Heures"])
         if not factu_df.empty:
@@ -325,94 +377,136 @@ def render_analyse_budgetaire_page():
 
         with colA:
             st.markdown("**CHF cumulés**")
-            if not daily_chf.empty:
-                s = daily_chf.copy().sort_values("Date")
-                s["Cum_Budget_CHF"] = s["Total"].cumsum()
-                frames = [pd.DataFrame({"Date": s["Date"], "Valeur": s["Cum_Budget_CHF"], "Série": "Budget Annuel (CHF)"})]
-                if not factu_daily.empty and "Montant" in factu_daily.columns:
-                    f = factu_daily[["Date","Montant"]].copy().sort_values("Date")
-                    f["Cum_Facturation"] = f["Montant"].cumsum()
-                    frames.append(pd.DataFrame({"Date": f["Date"], "Valeur": f["Cum_Facturation"], "Série": "Facturation (CHF)"}))
+            frames = []
+            if not daily_chf_ann.empty:
+                s = daily_chf_ann.copy().sort_values("Date")
+                s["Cum"] = s["Total"].cumsum()
+                frames.append(pd.DataFrame({"Date": s["Date"], "Valeur": s["Cum"], "Série": "Annuel (CHF)"}))
+            if not daily_chf_mod.empty:
+                s = daily_chf_mod.copy().sort_values("Date")
+                s["Cum"] = s["Total"].cumsum()
+                frames.append(pd.DataFrame({"Date": s["Date"], "Valeur": s["Cum"], "Série": "Modifié (CHF)"}))
+            if not factu_daily.empty and "Montant" in factu_daily.columns:
+                f = factu_daily[["Date","Montant"]].copy().sort_values("Date")
+                f["Cum"] = f["Montant"].cumsum()
+                frames.append(pd.DataFrame({"Date": f["Date"], "Valeur": f["Cum"], "Série": "Réalisé (CHF)"}))
+            if frames:
                 plot_df = pd.concat(frames, ignore_index=True)
                 ch = alt.Chart(plot_df).mark_line().encode(
                     x="Date:T", y="Valeur:Q", color="Série:N"
                 ).properties(height=300)
                 st.altair_chart(ch, use_container_width=True)
             else:
-                st.info("Pas de série CHF (préfixe 'Coût_').")
+                st.info("Pas de données CHF à tracer.")
 
         with colB:
             st.markdown("**Heures cumulées**")
-            if not daily_h.empty:
-                s = daily_h.copy().sort_values("Date")
-                s["Cum_Budget_h"] = s["Total"].cumsum()
-                frames = [pd.DataFrame({"Date": s["Date"], "Valeur": s["Cum_Budget_h"], "Série": "Budget Annuel (h)"})]
-                if not factu_daily.empty and "Heures" in factu_daily.columns:
-                    f = factu_daily[["Date","Heures"]].copy().sort_values("Date")
-                    f["Cum_Heures"] = f["Heures"].cumsum()
-                    frames.append(pd.DataFrame({"Date": f["Date"], "Valeur": f["Cum_Heures"], "Série": "Heures facturées (h)"}))
+            daily_h_ann = _daily_series(df_annuel, "Heures_")
+            daily_h_mod = _daily_series(df_mod, "Heures_")
+            frames = []
+            if not daily_h_ann.empty:
+                s = daily_h_ann.copy().sort_values("Date")
+                s["Cum"] = s["Total"].cumsum()
+                frames.append(pd.DataFrame({"Date": s["Date"], "Valeur": s["Cum"], "Série": "Annuel (h)"}))
+            if not daily_h_mod.empty:
+                s = daily_h_mod.copy().sort_values("Date")
+                s["Cum"] = s["Total"].cumsum()
+                frames.append(pd.DataFrame({"Date": s["Date"], "Valeur": s["Cum"], "Série": "Modifié (h)"}))
+            if not factu_daily.empty and "Heures" in factu_daily.columns:
+                f = factu_daily[["Date","Heures"]].copy().sort_values("Date")
+                f["Cum"] = f["Heures"].cumsum()
+                frames.append(pd.DataFrame({"Date": f["Date"], "Valeur": f["Cum"], "Série": "Réalisé (h)"}))
+            if frames:
                 plot_df = pd.concat(frames, ignore_index=True)
                 ch = alt.Chart(plot_df).mark_line().encode(
                     x="Date:T", y="Valeur:Q", color="Série:N"
                 ).properties(height=300)
                 st.altair_chart(ch, use_container_width=True)
             else:
-                st.info("Pas de série Heures (préfixe 'Heures_').")
+                st.info("Pas de données Heures à tracer.")
 
     # ======================
-    # D) Détails Mensuels
+    # D) Détails Mensuels (lecture par type)
     # ======================
     with tabs[3]:
         st.subheader("Détails Mensuels")
 
-        monthly_chf = _monthly_pivot(calendar_df, "Coût_")
-        monthly_h = _monthly_pivot(calendar_df, "Heures_")
-
-        month_opts = []
-        if not monthly_chf.empty:
-            month_opts = (monthly_chf[["Année","Mois_Num","Mois"]]
-                          .drop_duplicates().sort_values(["Année","Mois_Num"]).values.tolist())
-        elif not monthly_h.empty:
-            month_opts = (monthly_h[["Année","Mois_Num","Mois"]]
-                          .drop_duplicates().sort_values(["Année","Mois_Num"]).values.tolist())
-
+        # options à partir du DF annuel (ou modifié si annuel vide—mais on sait qu'il n'est pas vide)
+        month_opts = (_monthly_total(df_annuel, "Coût_")[["Année","Mois_Num","Mois"]]
+                      .drop_duplicates()
+                      .sort_values(["Année","Mois_Num"])
+                      .values.tolist())
         if not month_opts:
             st.info("Pas de données mensuelles disponibles.")
             return
 
         labels = [m[2] for m in month_opts]
-        idx_default = len(labels)-1
+        idx_default = len(labels) - 1
         sel = st.selectbox("Mois", labels, index=idx_default, key="ab_month_select")
         idx = labels.index(sel)
         year_sel, m_sel, _ = month_opts[idx]
 
-        def _filter_month(df):
-            if df.empty:
-                return df
-            return df[(df["Année"]==year_sel) & (df["Mois_Num"]==m_sel)]
+        def _monthly_pivot(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+            if df.empty or "Date" not in df.columns:
+                return pd.DataFrame()
+            work = df.copy()
+            work["Date"] = pd.to_datetime(work["Date"], errors="coerce")
+            work = work.dropna(subset=["Date"])
+            cols = [c for c in work.columns if isinstance(c, str) and c.startswith(prefix)]
+            if not cols:
+                return pd.DataFrame()
+            for c in cols:
+                work[c] = pd.to_numeric(work[c], errors="coerce").fillna(0.0)
+            work["Année"] = work["Date"].dt.year
+            work["Mois_Num"] = work["Date"].dt.month
+            work = work[(work["Année"]==year_sel) & (work["Mois_Num"]==m_sel)]
+            if work.empty:
+                return pd.DataFrame()
+            tidy = work[cols].sum().reset_index()
+            tidy.columns = ["Type","Valeur"]
+            tidy["Type"] = tidy["Type"].astype(str).str.replace(prefix, "", regex=False)
+            return tidy.sort_values("Type")
 
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("**Coûts (CHF) par type**")
-            if monthly_chf.empty:
+            st.markdown("**Coûts (CHF) par type — Annuel vs Modifié**")
+            ann_tidy = _monthly_pivot(df_annuel, "Coût_")
+            mod_tidy = _monthly_pivot(df_mod, "Coût_")
+            if ann_tidy.empty and mod_tidy.empty:
                 st.info("Aucune colonne 'Coût_'.")
             else:
-                subset = _filter_month(monthly_chf).copy()
-                cat_cols = [c for c in subset.columns if c not in ("Année","Mois_Num","Mois")]
-                tidy = subset.melt(id_vars=["Mois"], value_vars=cat_cols, var_name="Type", value_name="CHF")
-                tidy["Type"] = tidy["Type"].astype(str)
-                tidy = tidy.sort_values("Type")
-                st.dataframe(tidy.style.format({"CHF": _format_money_chf}), use_container_width=True)
+                base = ann_tidy.merge(mod_tidy, on="Type", how="outer", suffixes=("_Annuel","_Modifie")).fillna(0.0)
+                base = _variance_cols(base, "Valeur_Annuel", "Valeur_Modifie", "Mod_vs_Ann")
+                styler = (base[["Type","Valeur_Annuel","Valeur_Modifie","Mod_vs_Ann_Ecart","Mod_vs_Ann_Ecart_pct"]]
+                          .style
+                          .applymap(_style_variance, subset=["Mod_vs_Ann_Ecart"])
+                          .applymap(_style_variance_pct, subset=["Mod_vs_Ann_Ecart_pct"])
+                          .format({
+                              "Valeur_Annuel": _format_money_chf,
+                              "Valeur_Modifie": _format_money_chf,
+                              "Mod_vs_Ann_Ecart": _format_money_chf,
+                              "Mod_vs_Ann_Ecart_pct": _format_pct
+                          }))
+                st.dataframe(styler, use_container_width=True)
 
         with col2:
-            st.markdown("**Heures par type**")
-            if monthly_h.empty:
+            st.markdown("**Heures par type — Annuel vs Modifié**")
+            ann_tidy = _monthly_pivot(df_annuel, "Heures_")
+            mod_tidy = _monthly_pivot(df_mod, "Heures_")
+            if ann_tidy.empty and mod_tidy.empty:
                 st.info("Aucune colonne 'Heures_'.")
             else:
-                subset = _filter_month(monthly_h).copy()
-                cat_cols = [c for c in subset.columns if c not in ("Année","Mois_Num","Mois")]
-                tidy = subset.melt(id_vars=["Mois"], value_vars=cat_cols, var_name="Type", value_name="Heures")
-                tidy["Type"] = tidy["Type"].astype(str)
-                tidy = tidy.sort_values("Type")
-                st.dataframe(tidy.style.format({"Heures": _format_hours}), use_container_width=True)
+                base = ann_tidy.merge(mod_tidy, on="Type", how="outer", suffixes=("_Annuel","_Modifie")).fillna(0.0)
+                base = _variance_cols(base, "Valeur_Annuel", "Valeur_Modifie", "Mod_vs_Ann")
+                styler = (base[["Type","Valeur_Annuel","Valeur_Modifie","Mod_vs_Ann_Ecart","Mod_vs_Ann_Ecart_pct"]]
+                          .style
+                          .applymap(_style_variance, subset=["Mod_vs_Ann_Ecart"])
+                          .applymap(_style_variance_pct, subset=["Mod_vs_Ann_Ecart_pct"])
+                          .format({
+                              "Valeur_Annuel": _format_hours,
+                              "Valeur_Modifie": _format_hours,
+                              "Mod_vs_Ann_Ecart": _format_hours,
+                              "Mod_vs_Ann_Ecart_pct": _format_pct
+                          }))
+                st.dataframe(styler, use_container_width=True)
