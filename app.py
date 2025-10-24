@@ -116,27 +116,16 @@ else:
   
       st.divider()
 
-    # Outils
-    st.markdown("#### 🔧 Outils")
-    if st.button("🔍 Comparaison Historique", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Comparaison Historique" else "secondary"):
-        st.session_state.selected_page = "Comparaison Historique"
-    if st.button("🎯 Simulateur Objectif", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
-        st.session_state.selected_page = "Simulateur Objectif"
-
-    page = st.session_state.selected_page
-
-    # Outils
-    st.markdown("#### 🔧 Outils")
-    if st.button("🔍 Comparaison Historique", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Comparaison Historique" else "secondary"):
-        st.session_state.selected_page = "Comparaison Historique"
-    if st.button("🎯 Simulateur Objectif", use_container_width=True,
-                 type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
-        st.session_state.selected_page = "Simulateur Objectif"
-
-    page = st.session_state.selected_page
+      # Outils
+      st.markdown("#### 🔧 Outils")
+      if st.button("🔍 Comparaison Historique", use_container_width=True,
+                   type="primary" if st.session_state.selected_page == "Comparaison Historique" else "secondary"):
+          st.session_state.selected_page = "Comparaison Historique"
+      if st.button("🎯 Simulateur Objectif", use_container_width=True,
+                   type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
+          st.session_state.selected_page = "Simulateur Objectif"
+  
+      page = st.session_state.selected_page
 
         # Bouton Mode d'emploi
         if st.button("❔ Mode d'emploi", use_container_width=True):
