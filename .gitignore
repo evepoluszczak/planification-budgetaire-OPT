@@ -46,5 +46,10 @@ Thumbs.db
 !exemple_*.xlsx
 !exemple_*.csv
 
+# Input files directory - keep directory but ignore contents
+input_files/*
+!input_files/.gitkeep
+!input_files/README.md
+
 # Logs
 *.log
