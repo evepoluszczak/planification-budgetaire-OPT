@@ -262,13 +262,13 @@ def render_besoin_jour_page():
                     "Afficher grille:", ("Après règles (effective)", "Base (avant règles)"),
                     horizontal=True, key="bj_grid_view_toggle"
                 )
-                grid_to_show = eff_df if view_choice.startswith("Après") else base_df
-                
                 day_total_cost = day_total_hours * tarif_at_day
                 st.caption(
                     f"**Total pour le {preview_date.strftime('%d.%m.%Y')} ({view_choice}):** "
                     f"{day_total_hours:,.1f} h / {day_total_cost:,.0f} CHF"
                 )
+                
+                grid_to_show = eff_df if view_choice.startswith("Après") else base_df
                 
                 def highlight_zero_rows(row):
                     is_zero = (row == 0).all()
