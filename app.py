@@ -103,7 +103,7 @@ else:
         st.subheader("Données PAX")
 
         # Fragment pour le polling auto-refresh (ne bloque pas l'app)
-        @st.fragment(run_every="15s")
+        @st.fragment(run_every="0.5s")
         def pax_loading_status_fragment():
             """Fragment qui se rafraîchit automatiquement pour surveiller le chargement"""
             loading_status = check_pax_loading_status()
