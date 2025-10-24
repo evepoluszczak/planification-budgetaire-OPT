@@ -183,11 +183,11 @@ def render_simulateur_objectif_page():
                     column_config={
                         'Part Répartition (%)': st.column_config.NumberColumn(format="%.1f%%"),
                         'Ajustement Coût (CHF)': st.column_config.NumberColumn(
-                            format="%,.0f CHF"
+                            format="%.0f"
                         ),
-                        'Tarif Horaire (CHF)': st.column_config.NumberColumn(format="%.2f CHF"),
+                        'Tarif Horaire (CHF)': st.column_config.NumberColumn(format="%.2f"),
                         'Ajustement Heures (h)': st.column_config.NumberColumn(
-                            format="%,.0f h"
+                            format="%.0f"
                         ),
                     },
                     hide_index=True,
