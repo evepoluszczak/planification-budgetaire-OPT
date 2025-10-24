@@ -129,8 +129,8 @@ def render_budget_annuel_page():
 
                         # Tableaux Mensuels
                         tab_monthly_cost, tab_monthly_hour = st.tabs([
-                            "📊 Détail Mensuel (CHF)",
-                            "🕒 Détail Mensuel (Heures)"
+                            "Détail Mensuel (CHF)",
+                            "Détail Mensuel (Heures)"
                         ])
 
                         with tab_monthly_cost:
@@ -193,7 +193,7 @@ def render_budget_annuel_page():
 
                         # Section Détail Journalier
                         st.divider()
-                        st.markdown("##### 🗓️ Explorer le Détail Journalier")
+                        st.markdown("##### Explorer le Détail Journalier")
                         available_months = monthly_summary['Mois_Str'].unique().tolist()
                         selected_month = st.selectbox(
                             "Sélectionner un mois pour voir les jours :",
