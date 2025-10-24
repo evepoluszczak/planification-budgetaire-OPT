@@ -1,126 +1,12 @@
 """
 Chargement asynchrone des données PAX en arrière-plan
-- Thread dédié (non bloquant)
-- Lecture CSV/Excel robuste (fallback séparateur/encoding)
-- Mapping flexible des colonnes
-- Normalisation Schengen / Arrivée-Départ
-- Agrégation 30 minutes (resample '30T')
-- Remontée d'erreurs avec traceback pour debug UI
 """
-
-from __future__ import annotations
-
 import threading
 import datetime as dt
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
-
 import pandas as pd
-import numpy as np
 import streamlit as st
-import traceback
 
-
-# =========================
-# Configuration & constantes
-# =========================
-
-# Candidats de noms de colonnes tolérées (les fichiers sources peuvent varier)
-COLUMN_CANDIDATES: Dict[str, list[str]] = {
-    "time": ["Local Schedule Time", "DateTime", "Local Time", "Local_Time", "LocalScheduleTime"],
-    "pax": ["Expected Pax", "Pax", "Expected_Pax"],
-    "schengen": ["Schengen Flight", "Schengen_Flight", "Schengen"],
-    "ad": ["Arrival - Departure Code", "ArrDep", "A-D Code", "AD_Code", "A_D_Code"],
-}
-
-# Valeurs acceptées pour Schengen = True
-SCHENGEN_TRUE = {"y", "yes", "true", "1", "oui", "o", "schengen"}
-
-# =========================
-# Helpers
-# =========================
-
-def _pick_present_column(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
-    """Renvoie le premier nom de colonne présent dans df, parmi candidates."""
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
-def _parse_datetime_tolerant(series: pd.Series) -> pd.Series:
-    """
-    Parsing tolérant des datetime :
-    1) Tente '%d.%m.%Y %H:%M'
-    2) Fallback parsing générique
-    """
-    dt1 = pd.to_datetime(series, format="%d.%m.%Y %H:%M", errors="coerce")
-    if dt1.isna().all():
-        return pd.to_datetime(series, errors="coerce")
-    return dt1
-
-
-def _read_table_robust(file_path: Path, file_description: str) -> pd.DataFrame:
-    """
-    Lecture robuste CSV/Excel :
-    - CSV : tente sep=';' puis sep=','
-    - Excel : openpyxl
-    - Remonte une RuntimeError explicite en cas d'échec
-    """
-    try:
-        if file_path.suffix.lower() == ".csv":
-            try:
-                return pd.read_csv(file_path, sep=";", encoding="utf-8")
-            except Exception:
-                # Fallback séparateur "," ; tentative encodage par défaut
-                return pd.read_csv(file_path, sep=",")
-        elif file_path.suffix.lower() in [".xlsx", ".xls"]:
-            return pd.read_excel(file_path, engine="openpyxl")
-        else:
-            raise ValueError(f"Format non supporté: {file_path.suffix}")
-    except Exception as e:
-        raise RuntimeError(f"Échec lecture {file_description}: {type(e).__name__}: {e}") from e
-
-
-def _vectorize_and_resample_30min(df: pd.DataFrame, c_pax: str, c_sch: str, c_ad: str) -> pd.DataFrame:
-    """
-    Normalise les colonnes Schengen/A-D, crée les 4 colonnes PAX et agrège par 30 minutes.
-    Attend une colonne 'DateTime' déjà parsée.
-    """
-    # Pax numérique
-    df["Expected_Pax"] = pd.to_numeric(df[c_pax], errors="coerce").fillna(0.0)
-
-    # Normalisation Schengen & A/D
-    sch_raw = df[c_sch].astype(str).strip().str.lower()
-    ad_raw = df[c_ad].astype(str).strip().str.lower()
-
-    df["Is_Schengen"] = sch_raw.isin(SCHENGEN_TRUE)
-    df["Is_Arrival"] = ad_raw.str.startswith(("a", "arr"))
-    df["Is_Departure"] = ad_raw.str.startswith(("d", "dep"))
-
-    # Vectorisation
-    pax = df["Expected_Pax"].to_numpy()
-    sch = df["Is_Schengen"].to_numpy()
-    arr = df["Is_Arrival"].to_numpy()
-    dep = df["Is_Departure"].to_numpy()
-
-    df["Pax_Schengen_A"] = np.where(sch & arr, pax, 0.0)
-    df["Pax_Schengen_D"] = np.where(sch & dep, pax, 0.0)
-    df["Pax_NonSchengen_A"] = np.where(~sch & arr, pax, 0.0)
-    df["Pax_NonSchengen_D"] = np.where(~sch & dep, pax, 0.0)
-
-    # Agrégation 30 minutes
-    agg = (
-        df.set_index("DateTime")
-          .resample("30T")[["Pax_Schengen_A", "Pax_Schengen_D", "Pax_NonSchengen_A", "Pax_NonSchengen_D"]]
-          .sum()
-    )
-    return agg
-
-
-# =========================
-# Thread worker
-# =========================
 
 class PaxLoaderThread(threading.Thread):
     """Thread pour charger les données PAX (Forecast + Historic) en arrière-plan"""
@@ -130,249 +16,259 @@ class PaxLoaderThread(threading.Thread):
         self.forecast_path = forecast_path
         self.historical_path = historical_path
         self.session_state_key = session_state_key
-        self.result: Optional[Dict[str, Any]] = None
-        self.error: Optional[str] = None
-        self.progress: Dict[str, Any] = {"current_file": None, "percent": 0}
+        self.result = None
+        self.error = None
+        self.progress = {'current_file': None, 'percent': 0}
 
-    def run(self) -> None:
+    def run(self):
         """Exécute le chargement en arrière-plan"""
         try:
-            results: Dict[str, Any] = {
-                "forecast": None,
-                "historical": None,
-                "status": "success",
-                "errors": [],
-                "tracebacks": {},
+            results = {
+                'forecast': None,
+                'historical': None,
+                'status': 'success',
+                'errors': []
             }
 
-            # ---- Forecast ----
-            self.progress = {"current_file": "Forecast", "percent": 0}
+            # Charger Forecast
+            self.progress = {'current_file': 'Forecast', 'percent': 0}
             try:
-                forecast_data, fc_min, fc_max = self._load_pax_uncached(self.forecast_path, "Forecast PAX")
-                if forecast_data is not None and not forecast_data.empty:
-                    results["forecast"] = {
-                        "data": forecast_data,
-                        "min_date": fc_min,
-                        "max_date": fc_max,
-                        "status": "loaded",
+                forecast_data, fc_min, fc_max = self._load_pax_uncached(
+                    self.forecast_path, "Forecast PAX"
+                )
+                if not forecast_data.empty:
+                    results['forecast'] = {
+                        'data': forecast_data,
+                        'min_date': fc_min,
+                        'max_date': fc_max,
+                        'status': 'loaded'
                     }
                 else:
-                    results["forecast"] = {"status": "empty"}
-                    results["errors"].append("Forecast: Fichier vide")
+                    results['forecast'] = {'status': 'empty'}
+                    results['errors'].append('Forecast: Fichier vide')
             except Exception as e:
-                results["forecast"] = {"status": "error", "error": f"{type(e).__name__}: {e}"}
-                results["errors"].append(f"Forecast: {type(e).__name__}: {e}")
-                results["tracebacks"]["forecast"] = traceback.format_exc()
+                results['forecast'] = {'status': 'error', 'error': str(e)}
+                results['errors'].append(f'Forecast: {str(e)}')
 
-            self.progress = {"current_file": "Forecast", "percent": 50}
+            self.progress = {'current_file': 'Forecast', 'percent': 50}
 
-            # ---- Historic ----
-            self.progress = {"current_file": "Historic", "percent": 50}
+            # Charger Historic
+            self.progress = {'current_file': 'Historic', 'percent': 50}
             try:
-                historical_data, hist_min, hist_max = self._load_pax_uncached(self.historical_path, "Historic PAX")
-                if historical_data is not None and not historical_data.empty:
-                    results["historical"] = {
-                        "data": historical_data,
-                        "min_date": hist_min,
-                        "max_date": hist_max,
-                        "status": "loaded",
+                historical_data, hist_min, hist_max = self._load_pax_uncached(
+                    self.historical_path, "Historic PAX"
+                )
+                if not historical_data.empty:
+                    results['historical'] = {
+                        'data': historical_data,
+                        'min_date': hist_min,
+                        'max_date': hist_max,
+                        'status': 'loaded'
                     }
                 else:
-                    results["historical"] = {"status": "empty"}
-                    results["errors"].append("Historic: Fichier vide")
+                    results['historical'] = {'status': 'empty'}
+                    results['errors'].append('Historic: Fichier vide')
             except Exception as e:
-                results["historical"] = {"status": "error", "error": f"{type(e).__name__}: {e}"}
-                results["errors"].append(f"Historic: {type(e).__name__}: {e}")
-                results["tracebacks"]["historical"] = traceback.format_exc()
+                results['historical'] = {'status': 'error', 'error': str(e)}
+                results['errors'].append(f'Historic: {str(e)}')
 
-            self.progress = {"current_file": "Historic", "percent": 100}
+            self.progress = {'current_file': 'Historic', 'percent': 100}
 
-            # ---- Statut global ----
-            fc_loaded = results.get("forecast", {}).get("status") == "loaded"
-            hi_loaded = results.get("historical", {}).get("status") == "loaded"
-            if fc_loaded and hi_loaded:
-                results["status"] = "success"
-            elif fc_loaded ^ hi_loaded:
-                results["status"] = "partial"
+            # Déterminer le statut global
+            if results['forecast'] and results['forecast'].get('status') == 'loaded':
+                if results['historical'] and results['historical'].get('status') == 'loaded':
+                    results['status'] = 'success'
+                else:
+                    results['status'] = 'partial'  # Seulement Forecast chargé
+            elif results['historical'] and results['historical'].get('status') == 'loaded':
+                results['status'] = 'partial'  # Seulement Historic chargé
             else:
-                results["status"] = "error"
+                results['status'] = 'error'  # Aucun fichier chargé
 
             self.result = results
 
         except Exception as e:
-            self.error = f"{type(e).__name__}: {e}"
-            self.result = {
-                "status": "error",
-                "error": self.error,
-                "errors": [self.error],
-                "tracebacks": {"thread": traceback.format_exc()},
-            }
+            self.error = str(e)
+            self.result = {'status': 'error', 'error': str(e), 'errors': [str(e)]}
 
-    # ----------- Core loader (non-caché pour forcer relecture) -----------
+    def _load_pax_uncached(self, file_path: Path, file_description: str):
+        """Version non-cachée de load_pax_data pour forcer le rechargement"""
+        import numpy as np
 
-    def _load_pax_uncached(self, file_path: Path, file_description: str) -> Tuple[pd.DataFrame, Optional[dt.date], Optional[dt.date]]:
-        """Lecture robuste + mapping flexible + normalisation + agrégation 30'."""
         if not file_path.exists():
             raise FileNotFoundError(f"Fichier {file_description} non trouvé : {file_path}")
 
-        # 1) Lecture
-        df = _read_table_robust(file_path, file_description)
+        # Lecture du fichier (CSV ou Excel)
+        if file_path.suffix.lower() == '.csv':
+            df = pd.read_csv(file_path, delimiter=";")
+        elif file_path.suffix.lower() in ['.xlsx', '.xls']:
+            df = pd.read_excel(file_path, engine='openpyxl')
+        else:
+            raise ValueError(f"Format non supporté: {file_path.suffix}")
 
-        # 2) Mapping dynamique des colonnes
-        c_time = _pick_present_column(df, COLUMN_CANDIDATES["time"])
-        c_pax  = _pick_present_column(df, COLUMN_CANDIDATES["pax"])
-        c_sch  = _pick_present_column(df, COLUMN_CANDIDATES["schengen"])
-        c_ad   = _pick_present_column(df, COLUMN_CANDIDATES["ad"])
+        # Conversion DateTime
+        time_col_name = 'Local Schedule Time'
+        try:
+            df['DateTime'] = pd.to_datetime(
+                df[time_col_name],
+                format='%d.%m.%Y %H:%M',
+                errors='coerce'
+            )
+            if df['DateTime'].isnull().sum() > len(df) / 2:
+                df['DateTime'] = pd.to_datetime(df[time_col_name], errors='coerce')
+        except (KeyError, ValueError):
+            df['DateTime'] = pd.to_datetime(df[time_col_name], errors='coerce')
 
-        missing_keys = [k for k, v in {"time": c_time, "pax": c_pax, "schengen": c_sch, "ad": c_ad}.items() if v is None]
-        if missing_keys:
-            raise KeyError(f"Colonnes manquantes ({file_description}) : {', '.join(missing_keys)}")
+        # Nettoyage
+        pax_col = 'Expected Pax'
+        schengen_col = 'Schengen Flight'
+        arrdep_col = 'Arrival - Departure Code'
 
-        # 3) Datetime tolérant
-        work = df.copy()
-        work["DateTime"] = _parse_datetime_tolerant(work[c_time])
-        work = work.dropna(subset=["DateTime"])
-        if work.empty:
+        df[pax_col] = pd.to_numeric(df[pax_col], errors='coerce').fillna(0)
+
+        if not all(col in df.columns for col in [schengen_col, arrdep_col]):
+            missing = [col for col in [schengen_col, arrdep_col] if col not in df.columns]
+            raise KeyError(f"Colonnes manquantes : {', '.join(missing)}")
+
+        df = df.dropna(subset=['DateTime'])
+
+        if df.empty:
             return pd.DataFrame(), None, None
 
-        # 4) Normalisation, vectorisation et agrégation
-        agg = _vectorize_and_resample_30min(work, c_pax=c_pax, c_sch=c_sch, c_ad=c_ad)
+        # Dates Min/Max
+        min_date = df['DateTime'].min().date()
+        max_date = df['DateTime'].max().date()
 
-        if agg.empty:
-            return pd.DataFrame(), None, None
+        # Breakdown vectorisé
+        schengen_mask = df[schengen_col] == 'Y'
+        arrival_mask = df[arrdep_col] == 'A'
+        nonschengen_mask = ~schengen_mask
+        departure_mask = ~arrival_mask
+        pax_values = df[pax_col]
 
-        # 5) Min/Max (dates)
-        min_date = agg.index.min().date() if not agg.empty else None
-        max_date = agg.index.max().date() if not agg.empty else None
+        df['Pax_Schengen_A'] = np.where(schengen_mask & arrival_mask, pax_values, 0)
+        df['Pax_Schengen_D'] = np.where(schengen_mask & departure_mask, pax_values, 0)
+        df['Pax_NonSchengen_A'] = np.where(nonschengen_mask & arrival_mask, pax_values, 0)
+        df['Pax_NonSchengen_D'] = np.where(nonschengen_mask & departure_mask, pax_values, 0)
 
-        return agg, min_date, max_date
+        # Agrégation
+        pax_agg = df.set_index('DateTime').resample('30T').agg({
+            'Pax_Schengen_A': 'sum', 'Pax_Schengen_D': 'sum',
+            'Pax_NonSchengen_A': 'sum', 'Pax_NonSchengen_D': 'sum'
+        })
+
+        return pax_agg, min_date, max_date
 
 
-# =========================
-# API Streamlit
-# =========================
-
-def start_pax_loading(forecast_path: Path, historical_path: Path) -> str:
+def start_pax_loading(forecast_path: Path, historical_path: Path):
     """
     Démarre le chargement des données PAX (Forecast + Historic) en arrière-plan.
-    Initialise st.session_state et lance le thread.
-    Retourne une clé de session (id) du loader.
+    Met à jour st.session_state pour tracker l'état.
     """
-    # Initialiser l'état
-    st.session_state.pax_loading_status = "loading"
-    st.session_state.pax_loading_progress = {"current_file": "Démarrage...", "percent": 0}
+    # Initialiser l'état de chargement
+    st.session_state.pax_loading_status = 'loading'
+    st.session_state.pax_loading_progress = {'current_file': 'Démarrage...', 'percent': 0}
     st.session_state.pax_loading_error = None
-    st.session_state.pax_loading_tracebacks = {}
-    st.session_state.pax_loading_elapsed = 0.0
 
-    # Clé unique du loader
-    session_key = f"pax_loader_{dt.datetime.now().timestamp()}"
+    # Créer et démarrer le thread
+    session_key = f'pax_loader_{dt.datetime.now().timestamp()}'
     loader_thread = PaxLoaderThread(forecast_path, historical_path, session_key)
 
-    # Stocker le thread et l'heure de départ
+    # Stocker la référence au thread
     st.session_state.pax_loader_thread = loader_thread
     st.session_state.pax_loader_start_time = dt.datetime.now()
 
-    # Démarrer
+    # Démarrer le thread
     loader_thread.start()
+
     return session_key
 
 
-def check_pax_loading_status() -> str:
+def check_pax_loading_status():
     """
-    Vérifie l'état du chargement PAX et met à jour st.session_state.
-    Retourne: 'idle' | 'loading' | 'success' | 'partial' | 'error'
+    Vérifie l'état du chargement PAX et met à jour session_state.
+    Retourne: 'loading', 'success', 'partial', 'error', ou 'idle'
     """
-    if "pax_loader_thread" not in st.session_state:
-        return "idle"
+    if 'pax_loader_thread' not in st.session_state:
+        return 'idle'
 
-    thread: PaxLoaderThread = st.session_state.pax_loader_thread
+    thread = st.session_state.pax_loader_thread
 
-    # Toujours vivant → en cours
+    # Vérifier si le thread est toujours en cours
     if thread.is_alive():
+        # Calculer le temps écoulé
         elapsed = (dt.datetime.now() - st.session_state.pax_loader_start_time).total_seconds()
         st.session_state.pax_loading_elapsed = elapsed
+        # Mettre à jour la progression
         st.session_state.pax_loading_progress = thread.progress
-        return "loading"
+        return 'loading'
 
-    # Thread terminé : récupérer le résultat
+    # Le thread est terminé, récupérer les résultats
     if thread.result is not None:
         result = thread.result
-        status = result.get("status")
+        status = result.get('status')
 
-        # Forecast
-        fc = result.get("forecast") or {}
-        if fc.get("status") == "loaded":
-            st.session_state.pax_forecast_data = fc.get("data")
-            st.session_state.pax_forecast_min_date = fc.get("min_date")
-            st.session_state.pax_forecast_max_date = fc.get("max_date")
-            st.session_state.pax_forecast_status = "loaded"
+        # Stocker les données Forecast
+        if result.get('forecast') and result['forecast'].get('status') == 'loaded':
+            fc_data = result['forecast']['data']
+            st.session_state.pax_forecast_data = fc_data
+            st.session_state.pax_forecast_min_date = result['forecast']['min_date']
+            st.session_state.pax_forecast_max_date = result['forecast']['max_date']
+            st.session_state.pax_forecast_status = 'loaded'
         else:
-            st.session_state.pax_forecast_status = fc.get("status", "not_loaded")
+            st.session_state.pax_forecast_status = result.get('forecast', {}).get('status', 'not_loaded')
 
-        # Historic
-        hi = result.get("historical") or {}
-        if hi.get("status") == "loaded":
-            st.session_state.pax_historical_data = hi.get("data")
-            st.session_state.pax_historical_min_date = hi.get("min_date")
-            st.session_state.pax_historical_max_date = hi.get("max_date")
-            st.session_state.pax_historical_status = "loaded"
+        # Stocker les données Historic
+        if result.get('historical') and result['historical'].get('status') == 'loaded':
+            hist_data = result['historical']['data']
+            st.session_state.pax_historical_data = hist_data
+            st.session_state.pax_historical_min_date = result['historical']['min_date']
+            st.session_state.pax_historical_max_date = result['historical']['max_date']
+            st.session_state.pax_historical_status = 'loaded'
         else:
-            st.session_state.pax_historical_status = hi.get("status", "not_loaded")
+            st.session_state.pax_historical_status = result.get('historical', {}).get('status', 'not_loaded')
 
-        # Statut global
+        # Stocker le statut global
         st.session_state.pax_loading_status = status
-        st.session_state.pax_data_status = "attempted"
+        st.session_state.pax_data_status = 'attempted'
 
-        # Erreurs & tracebacks
-        st.session_state.pax_loading_error = " | ".join(result.get("errors", [])) or None
-        st.session_state.pax_loading_tracebacks = result.get("tracebacks", {}) or {}
+        # Stocker les erreurs s'il y en a
+        if result.get('errors'):
+            st.session_state.pax_loading_error = ' | '.join(result['errors'])
+        else:
+            st.session_state.pax_loading_error = None
 
-        # Nettoyer la référence au thread (libère)
+        # Nettoyer la référence au thread
         del st.session_state.pax_loader_thread
 
         return status
 
-    # Thread terminé mais sans result → erreur stockée ?
+    # Erreur durant l'exécution
     if thread.error is not None:
-        st.session_state.pax_loading_status = "error"
+        st.session_state.pax_loading_status = 'error'
         st.session_state.pax_loading_error = thread.error
-        # Nettoyage
         del st.session_state.pax_loader_thread
-        return "error"
+        return 'error'
 
-    # Cas limite : devrait rarement arriver
-    return "loading"
+    # État indéterminé (ne devrait pas arriver)
+    return 'loading'
 
 
-def get_pax_loading_info() -> Dict[str, Any]:
-    """Retourne les informations d'état du chargement pour affichage UI."""
-    status = st.session_state.get("pax_loading_status", "idle")
-    info: Dict[str, Any] = {
-        "status": status,
-        "elapsed": st.session_state.get("pax_loading_elapsed", 0.0),
-        "error": st.session_state.get("pax_loading_error"),
-        "progress": st.session_state.get("pax_loading_progress", {}),
-        "forecast_status": st.session_state.get("pax_forecast_status"),
-        "historical_status": st.session_state.get("pax_historical_status"),
-        "forecast_min": st.session_state.get("pax_forecast_min_date"),
-        "forecast_max": st.session_state.get("pax_forecast_max_date"),
-        "historical_min": st.session_state.get("pax_historical_min_date"),
-        "historical_max": st.session_state.get("pax_historical_max_date"),
-        "tracebacks": st.session_state.get("pax_loading_tracebacks", {}),
+def get_pax_loading_info():
+    """Retourne les informations d'état du chargement pour l'affichage"""
+    status = st.session_state.get('pax_loading_status', 'idle')
+
+    info = {
+        'status': status,
+        'elapsed': st.session_state.get('pax_loading_elapsed', 0),
+        'error': st.session_state.get('pax_loading_error'),
+        'progress': st.session_state.get('pax_loading_progress', {}),
+        'forecast_status': st.session_state.get('pax_forecast_status'),
+        'historical_status': st.session_state.get('pax_historical_status'),
+        'forecast_min': st.session_state.get('pax_forecast_min_date'),
+        'forecast_max': st.session_state.get('pax_forecast_max_date'),
+        'historical_min': st.session_state.get('pax_historical_min_date'),
+        'historical_max': st.session_state.get('pax_historical_max_date'),
     }
+
     return info
-
-
-def reset_pax_loading() -> None:
-    """Réinitialise proprement l'état de chargement PAX (utile pour 'Réessayer')."""
-    st.cache_data.clear()
-    for k in [
-        "pax_loading_status", "pax_loading_progress", "pax_loading_error",
-        "pax_loading_elapsed", "pax_loading_tracebacks", "pax_loader_thread",
-        "pax_loader_start_time", "pax_data_status",
-        "pax_forecast_data", "pax_forecast_min_date", "pax_forecast_max_date", "pax_forecast_status",
-        "pax_historical_data", "pax_historical_min_date", "pax_historical_max_date", "pax_historical_status",
-    ]:
-        if k in st.session_state:
-            st.session_state.pop(k, None)
