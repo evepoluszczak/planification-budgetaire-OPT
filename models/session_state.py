@@ -80,8 +80,6 @@ def initialize_session_state_2026():
             for jour_saison, day_data in AT_DATA.items():
                 st.session_state.planning_data[cat][jour_saison] = parse_grid_from_markers(day_data, perims)
             # Ajouter aussi une grille "Default" (copie de Lundi Standard)
-            if 'Lundi Standard' in AT_DATA:
-                st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(AT_DATA['Lundi Standard'], perims)
         elif cat == 'CSC':
             csc_data = {p: [1]*34 + [0]*(len(TIME_SLOTS)-34) for p in perims}
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(csc_data, perims)
