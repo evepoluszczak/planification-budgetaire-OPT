@@ -287,7 +287,7 @@ else:
         from ui.pages.simulateur_objectif import render_simulateur_objectif_page
         render_simulateur_objectif_page()
 
-   elif page == "Analyse Budgétaire":
+    elif page == "Analyse Budgétaire":
         import importlib, traceback, streamlit as st
         try:
             ab = importlib.import_module("ui.pages.analyse_budgetaire")
