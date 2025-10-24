@@ -12,8 +12,8 @@ RULES_PLANNING_PATH = BASE_DIR / "rules_planning.json"
 RULES_BESOIN_JOUR_PATH = BASE_DIR / "rules_besoin_jour.json"
 INPUT_FILES_DIR = BASE_DIR / "input_files"
 PAX_DATA_FILE_PATH = INPUT_FILES_DIR / "Forecast_pax.xlsx"  # Kept for compatibility
-PAX_FORECAST_FILE_PATH = BASE_DIR / "input_files" / "Forecast_pax.xlsx"
-PAX_HISTORICAL_FILE_PATH = BASE_DIR / "input_files" / "Historic_pax.xlsx"
+PAX_FORECAST_FILE_PATH = INPUT_FILES_DIR / "Forecast_pax.xlsx"
+PAX_HISTORICAL_FILE_PATH = INPUT_FILES_DIR / "Historic_pax.xlsx"
 FACTU_AT_DIR = BASE_DIR / "input_files"/"facturation"
 FACTU_AT_GLOB = "Facturation Lot A *.xlsx"
 
