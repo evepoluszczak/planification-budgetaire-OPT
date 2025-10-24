@@ -8,6 +8,7 @@ import streamlit as st
 from config.constants import TIME_SLOTS, RULES_BESOIN_JOUR_PATH
 from core.rules import load_rules_from_json
 from core.budget import generate_budget_state
+from models.planif_AT_base import DATA as AT_DATA
 
 
 def initialize_session_state_2026():
@@ -39,8 +40,10 @@ def initialize_session_state_2026():
             'Check in 1', 'Check in 2', 'Check in 3', 'Guichet info', 'Transit',
             'Aile Est Départ', 'Aile Est Départ ABC', 'Aile Est Arrivée',
             'Aile Est Arrivée ABC', 'Aile Est Arrivée Transf.',
-            'Aile Est Arrivée Dispatch.', "Sect. France", "Visitor's Center",
-            'Hall bagage (+ Transfert)', 'Accueil famille CSC', 'Priority Lane'
+            'Aile Est Arrivée dispatch', "Sect. France", "Visitor's Center",
+            'Hall bagage (+ Transfert)', 'Accueil famille CSC', 'Accueil famille AE',
+            'Accès Sect. France', 'Priority Lane', 'T2 Arrivée', 'T2 Départ',
+            'T2 Portier', 'T2 Renfort'
         ],
         "CSC": [
             'CSC 1 Dispatch E-gate', 'CSC 2 Assistant E-gate',
@@ -72,7 +75,11 @@ def initialize_session_state_2026():
     for cat, perims in st.session_state.perimetres.items():
         st.session_state.planning_data[cat] = {}
 
-        if cat == 'CSC':
+        if cat == 'AT':
+            # Charger les données AT depuis planif_AT_base.py
+            for jour_saison, day_data in AT_DATA.items():
+                st.session_state.planning_data[cat][jour_saison] = parse_grid_from_markers(day_data, perims)
+        elif cat == 'CSC':
             csc_data = {p: [1]*34 + [0]*(len(TIME_SLOTS)-34) for p in perims}
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(csc_data, perims)
         elif cat == 'EES':
@@ -94,11 +101,6 @@ def initialize_session_state_2026():
             st.session_state.planning_data[cat]['Default'] = pd.DataFrame(
                 0, index=perims, columns=TIME_SLOTS
             ).astype(int)
-
-    # NOTE: Les données AT avec tous les jours-types sont volumineuses
-    # Pour la simplicité, on ne les charge pas ici dans le refactoring
-    # L'ancien code les contenait hardcodées. On peut les ajouter si nécessaire
-    # ou les charger depuis un fichier de configuration séparé
 
     # Initialiser le mapping des coûts
     st.session_state.cost_mapping = {}
