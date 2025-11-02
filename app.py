@@ -86,14 +86,14 @@ else:
 
     with st.sidebar:
         st.title("Navigation")
-    
+
         # Initialiser la page sélectionnée si nécessaire
         if 'selected_page' not in st.session_state:
             st.session_state.selected_page = "Configuration"
-    
+
         # Configuration Générale
         st.markdown("#### Configuration Générale")
-        if st.button("Configuration", use_container_width=True, 
+        if st.button("Configuration", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Configuration" else "secondary"):
             st.session_state.selected_page = "Configuration"
             st.rerun()
@@ -101,9 +101,9 @@ else:
                      type="primary" if st.session_state.selected_page == "Planification" else "secondary"):
             st.session_state.selected_page = "Planification"
             st.rerun()
-    
+
         st.divider()
-    
+
         # Gestion du Budget
         st.markdown("#### Gestion du Budget")
         if st.button("Budget Annuel", use_container_width=True,
@@ -118,9 +118,9 @@ else:
                      type="primary" if st.session_state.selected_page == "Analyse Budgétaire" else "secondary"):
             st.session_state.selected_page = "Analyse Budgétaire"
             st.rerun()
-    
+
         st.divider()
-  
+
         # Outils
         st.markdown("#### Outils")
         if st.button("Comparaison Historique", use_container_width=True,
@@ -131,7 +131,7 @@ else:
                      type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
             st.session_state.selected_page = "Simulateur Objectif"
             st.rerun()
-    
+
         page = st.session_state.selected_page
 
         # Bouton Mode d'emploi
@@ -320,6 +320,10 @@ else:
         from ui.pages.besoin_jour import render_besoin_jour_page
         render_besoin_jour_page()
 
+    elif page == "Analyse Budgétaire":
+        from ui.pages.analyse_budgetaire import render_analyse_budgetaire_page
+        render_analyse_budgetaire_page()
+
     elif page == "Comparaison Historique":
         from ui.pages.comparaison_historique import render_comparaison_historique_page
         render_comparaison_historique_page()
@@ -327,15 +331,4 @@ else:
     elif page == "Simulateur Objectif":
         from ui.pages.simulateur_objectif import render_simulateur_objectif_page
         render_simulateur_objectif_page()
-
-    elif page == "Analyse Budgétaire":
-        import importlib, traceback, streamlit as st
-        try:
-            ab = importlib.import_module("ui.pages.analyse_budgetaire")
-            render_analyse_budgetaire_page = getattr(ab, "render_analyse_budgetaire_page")
-        except Exception:
-            st.error("❌ Erreur lors du chargement de la page Analyse Budgétaire")
-            st.code(traceback.format_exc())
-            st.stop()
-        render_analyse_budgetaire_page()
 
