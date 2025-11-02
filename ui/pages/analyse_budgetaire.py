@@ -104,18 +104,21 @@ def load_facturation_data_for_year(year: int):
 def calculate_budget_modifie(year: int):
     """
     Calcule le budget modifié pour l'année (Budget Annuel + ajustements Besoin Jour).
-    
+    IMPORTANT: Cette fonction DOIT utiliser exactement la même logique que besoin_jour.py
+    pour garantir la cohérence des résultats.
+
     Returns:
-        dict avec 'heures_total' et 'cout_total'
+        dict avec 'heures_total', 'cout_total' et 'calendar_df'
     """
     bs = st.session_state.get('budget_state', {})
     if not bs or bs.get('year') != year or 'calendar_df' not in bs:
         return None
-    
+
     try:
+        # EXACTEMENT comme dans besoin_jour.py ligne 55
         calendar_dyn = bs['calendar_df'].copy()
-        
-        # Récupérer le tarif AT
+
+        # Récupérer le tarif AT (même logique que besoin_jour.py lignes 58-65)
         tarif_at = 0.0
         personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
         if personnel_type_at:
@@ -124,63 +127,64 @@ def calculate_budget_modifie(year: int):
                 row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
                 if not row_tarif.empty:
                     tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
-        
+
+        # Préparer les données AT (même logique que besoin_jour.py lignes 67-69)
         perimetres_AT = st.session_state.perimetres.get("AT", [])
         time_slots_default = TIME_SLOTS
         planning_dict_at = st.session_state.planning_data.get("AT", {})
-        
-        heures_vals_at_modifie = []
-        costs_vals_at_modifie = []
-        
-        # Recalculer avec les ajustements Besoin Jour
+
+        heures_vals_at_recalc = []
+        costs_vals_at_recalc = []
+
+        # Recalculer AT avec les ajustements (EXACTEMENT comme besoin_jour.py lignes 71-82)
         for _, r in calendar_dyn.iterrows():
             jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
             jtg = r['Jour_Type_Global']
-            
+
             _, base_df_at = _ensure_grid(
                 planning_dict_at, jtg, perimetres_AT, time_slots_default
             )
-            
+
             # Appliquer les ajustements Besoin Jour
             eff_df_at = _apply_ops_to_grid(
                 base_df_at, date_, jour, saison, category="AT"
             )
-            
+
             day_hours = eff_df_at.values.sum() * 0.5
-            heures_vals_at_modifie.append(day_hours)
-            costs_vals_at_modifie.append(day_hours * tarif_at)
-        
-        calendar_dyn["Heures_AT_Modifie"] = heures_vals_at_modifie
-        calendar_dyn["Coût_AT_Modifie"] = costs_vals_at_modifie
-        
-        # Recalculer les totaux pour toutes les catégories avec ajustements
+            heures_vals_at_recalc.append(day_hours)
+            costs_vals_at_recalc.append(day_hours * tarif_at)
+
+        # Remplacer DIRECTEMENT les colonnes AT (comme besoin_jour.py lignes 84-85)
+        calendar_dyn["Heures_AT"] = heures_vals_at_recalc
+        calendar_dyn["Coût_AT"] = costs_vals_at_recalc
+
+        # Recalculer les totaux (EXACTEMENT comme besoin_jour.py lignes 87-97)
         heure_cols_categories = [c for c in calendar_dyn.columns
                                 if c.startswith('Heures_') and c != 'Heures_Total_Jour']
         cout_cols_categories = [c for c in calendar_dyn.columns
                                if c.startswith('Coût_') and c != 'Coût_Total_Jour']
-        
-        # Remplacer les valeurs AT par les valeurs modifiées
-        if 'Heures_AT' in calendar_dyn.columns:
-            calendar_dyn['Heures_AT'] = calendar_dyn['Heures_AT_Modifie']
-        if 'Coût_AT' in calendar_dyn.columns:
-            calendar_dyn['Coût_AT'] = calendar_dyn['Coût_AT_Modifie']
-        
-        # Recalculer les totaux
-        calendar_dyn['Heures_Total_Modifie'] = calendar_dyn[heure_cols_categories].sum(
+
+        calendar_dyn['Heures_Total_Jour'] = calendar_dyn[heure_cols_categories].sum(
             axis=1
         ) if heure_cols_categories else 0.0
-        calendar_dyn['Coût_Total_Modifie'] = calendar_dyn[cout_cols_categories].sum(
+        calendar_dyn['Coût_Total_Jour'] = calendar_dyn[cout_cols_categories].sum(
             axis=1
         ) if cout_cols_categories else 0.0
-        
+
+        # Calculer les totaux annuels (comme besoin_jour.py lignes 99-100)
+        cur_hours_recalc = calendar_dyn['Heures_Total_Jour'].sum()
+        cur_cost_recalc = calendar_dyn['Coût_Total_Jour'].sum()
+
         return {
-            'heures_total': calendar_dyn['Heures_Total_Modifie'].sum(),
-            'cout_total': calendar_dyn['Coût_Total_Modifie'].sum(),
+            'heures_total': cur_hours_recalc,
+            'cout_total': cur_cost_recalc,
             'calendar_df': calendar_dyn
         }
-        
+
     except Exception as e:
         st.error(f"Erreur lors du calcul du budget modifié: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 
 
@@ -388,23 +392,45 @@ def render_analyse_budgetaire_page():
             # S'assurer que Date est au bon format
             calendar_with_modif['Date'] = pd.to_datetime(calendar_with_modif['Date'])
             calendar_with_modif['Mois'] = calendar_with_modif['Date'].dt.to_period('M')
-            
-            # Agréger par mois pour Budget Annuel et Modifié
-            monthly_budget = calendar_with_modif.groupby('Mois').agg({
+
+            # Récupérer aussi le calendar_df ORIGINAL (Budget Annuel non modifié)
+            calendar_annuel = bs.get('calendar_df', pd.DataFrame()).copy()
+            calendar_annuel['Date'] = pd.to_datetime(calendar_annuel['Date'])
+            calendar_annuel['Mois'] = calendar_annuel['Date'].dt.to_period('M')
+
+            # Agréger par mois - Budget Annuel (original, sans ajustements)
+            monthly_annuel = calendar_annuel.groupby('Mois').agg({
                 'Heures_Total_Jour': 'sum',
-                'Coût_Total_Jour': 'sum',
-                'Heures_Total_Modifie': 'sum',
-                'Coût_Total_Modifie': 'sum'
+                'Coût_Total_Jour': 'sum'
             }).reset_index()
-            
+            monthly_annuel.rename(columns={
+                'Heures_Total_Jour': 'Heures_Annuel',
+                'Coût_Total_Jour': 'Cout_Annuel'
+            }, inplace=True)
+
+            # Agréger par mois - Budget Modifié (avec ajustements)
+            # IMPORTANT: calendar_with_modif contient les valeurs modifiées dans
+            # Heures_Total_Jour et Coût_Total_Jour (après recalcul avec ajustements)
+            monthly_modifie = calendar_with_modif.groupby('Mois').agg({
+                'Heures_Total_Jour': 'sum',
+                'Coût_Total_Jour': 'sum'
+            }).reset_index()
+            monthly_modifie.rename(columns={
+                'Heures_Total_Jour': 'Heures_Modifie',
+                'Coût_Total_Jour': 'Cout_Modifie'
+            }, inplace=True)
+
+            # Fusionner Annuel et Modifié
+            monthly_budget = monthly_annuel.merge(monthly_modifie, on='Mois', how='outer')
+
             monthly_budget['Mois_str'] = monthly_budget['Mois'].astype(str)
             monthly_budget['Mois_dt'] = monthly_budget['Mois'].apply(lambda x: x.to_timestamp())
-            
+
             # Calcul cumulé
-            monthly_budget['Heures_Annuel_Cumul'] = monthly_budget['Heures_Total_Jour'].cumsum()
-            monthly_budget['Cout_Annuel_Cumul'] = monthly_budget['Coût_Total_Jour'].cumsum()
-            monthly_budget['Heures_Modifie_Cumul'] = monthly_budget['Heures_Total_Modifie'].cumsum()
-            monthly_budget['Cout_Modifie_Cumul'] = monthly_budget['Coût_Total_Modifie'].cumsum()
+            monthly_budget['Heures_Annuel_Cumul'] = monthly_budget['Heures_Annuel'].cumsum()
+            monthly_budget['Cout_Annuel_Cumul'] = monthly_budget['Cout_Annuel'].cumsum()
+            monthly_budget['Heures_Modifie_Cumul'] = monthly_budget['Heures_Modifie'].cumsum()
+            monthly_budget['Cout_Modifie_Cumul'] = monthly_budget['Cout_Modifie'].cumsum()
             
             # Agréger les données de facturation par mois si disponibles
             if not df_factu.empty:
@@ -553,10 +579,10 @@ def render_analyse_budgetaire_page():
             # Sélectionner et renommer les colonnes
             columns_to_show = {
                 'Mois': 'Mois',
-                'Heures_Total_Jour': 'Heures Annuel',
-                'Heures_Total_Modifie': 'Heures Modifié',
-                'Coût_Total_Jour': 'Coût Annuel (CHF)',
-                'Coût_Total_Modifie': 'Coût Modifié (CHF)'
+                'Heures_Annuel': 'Heures Annuel',
+                'Heures_Modifie': 'Heures Modifié',
+                'Cout_Annuel': 'Coût Annuel (CHF)',
+                'Cout_Modifie': 'Coût Modifié (CHF)'
             }
             
             if 'Heures_Total' in monthly_table.columns:
