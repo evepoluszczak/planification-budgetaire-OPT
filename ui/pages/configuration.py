@@ -42,7 +42,7 @@ def render_configuration_page():
     with st.expander("2 - Gestion des Périmètres par Catégorie", expanded=False):
         st.info(
             "🛈 Listez ici tous les postes ou zones opérationnelles ('Périmètres') et "
-            "regroupez-les par 'Catégorie' - utiliser les types de personnel définis en 1. "
+            "regroupez-les par 'Catégorie' - **utilisez les types de personnel définis en 1.** "
             "C'est essentiel pour organiser la planification."
         )
         if 'perimetres' not in st.session_state or not st.session_state.perimetres:

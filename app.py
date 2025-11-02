@@ -1,7 +1,3 @@
-"""
-Application Streamlit - Planificateur Budgétaire OPT
-Version refactorisée et modulaire
-"""
 import datetime as dt
 import re
 import pandas as pd
@@ -87,15 +83,56 @@ else:
     # =================== Interface principale (données chargées) ===================
 
     # Sidebar : Navigation et Export
+
     with st.sidebar:
         st.title("Navigation")
 
-        page = st.radio(
-            "Navigation",
-            ["Configuration", "Planification", "Budget Annuel", "Besoin Jour",
-             "Analyse Budgétaire", "Comparaison Historique", "Simulateur Objectif"],
-            label_visibility="hidden"
-        )
+        # Initialiser la page sélectionnée si nécessaire
+        if 'selected_page' not in st.session_state:
+            st.session_state.selected_page = "Configuration"
+
+        # Configuration Générale
+        st.markdown("#### Configuration Générale")
+        if st.button("Configuration", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Configuration" else "secondary"):
+            st.session_state.selected_page = "Configuration"
+            st.rerun()
+        if st.button("Planification", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Planification" else "secondary"):
+            st.session_state.selected_page = "Planification"
+            st.rerun()
+
+        st.divider()
+
+        # Gestion du Budget
+        st.markdown("#### Gestion du Budget")
+        if st.button("Budget Annuel", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Budget Annuel" else "secondary"):
+            st.session_state.selected_page = "Budget Annuel"
+            st.rerun()
+        if st.button("Besoin Jour", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Besoin Jour" else "secondary"):
+            st.session_state.selected_page = "Besoin Jour"
+            st.rerun()
+        if st.button("Analyse Budgétaire", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Analyse Budgétaire" else "secondary"):
+            st.session_state.selected_page = "Analyse Budgétaire"
+            st.rerun()
+
+        st.divider()
+
+        # Outils
+        st.markdown("#### Outils")
+        if st.button("Comparaison Historique", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Comparaison Historique" else "secondary"):
+            st.session_state.selected_page = "Comparaison Historique"
+            st.rerun()
+        if st.button("Simulateur Objectif", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
+            st.session_state.selected_page = "Simulateur Objectif"
+            st.rerun()
+
+        page = st.session_state.selected_page
 
         # Bouton Mode d'emploi
         if st.button("❔ Mode d'emploi", use_container_width=True):
@@ -134,8 +171,30 @@ else:
 
             elif loading_status == 'error':
                 error_msg = pax_info.get('error', 'Erreur inconnue')
-                st.error(f"❌ Erreur de chargement")
-                st.caption(f"Détails : {error_msg}")
+            
+                # Drapeau de masquage
+                if "pax_error_dismissed" not in st.session_state:
+                    st.session_state.pax_error_dismissed = False
+            
+                if not st.session_state.pax_error_dismissed:
+                    with st.container(border=True):
+                        st.error("❌ Erreur de chargement")
+                        st.caption(f"Détails : {error_msg}")
+                        cols = st.columns([1,1])
+                        with cols[0]:
+                            if st.button("Masquer", key="hide_pax_error_btn"):
+                                st.session_state.pax_error_dismissed = True
+                        with cols[1]:
+                            if st.button("Voir tracebacks", key="show_tracebacks_btn"):
+                                tb = pax_info.get('tracebacks', {})
+                                if tb:
+                                    with st.expander("Traceback (debug)"):
+                                        for k, v in tb.items():
+                                            st.markdown(f"**{k}**")
+                                            st.code(v or "—", language="python")
+                else:
+                    st.caption("Erreur de chargement masquée (cliquez Recharger pour réessayer).")
+
 
         # Afficher le fragment de polling
         pax_loading_status_fragment()
@@ -272,3 +331,4 @@ else:
     elif page == "Simulateur Objectif":
         from ui.pages.simulateur_objectif import render_simulateur_objectif_page
         render_simulateur_objectif_page()
+
