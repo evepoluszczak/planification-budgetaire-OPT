@@ -15,6 +15,7 @@ from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import start_pax_loading, check_pax_loading_status, get_pax_loading_info
 from utils.autosave import save_session_state_auto, load_session_state_auto, autosave_exists, get_autosave_info
 from ui.components import show_help_dialog, planning_editor_ui
+from zoneinfo import ZoneInfo
 
 # =================== Configuration initiale ===================
 configure_streamlit()
@@ -193,10 +194,18 @@ else:
         # Indicateur de sauvegarde automatique
         if 'last_autosave' in st.session_state:
             try:
+                # Convertir en fuseau horaire Paris
                 last_save = dt.datetime.fromisoformat(st.session_state.last_autosave)
+                paris_tz = ZoneInfo("Europe/Paris")
+                # Si last_save est naïf (pas de timezone), on l’assigne au fuseau local
+                if last_save.tzinfo is None:
+                    last_save = last_save.replace(tzinfo=ZoneInfo("UTC")).astimezone(paris_tz)
+                else:
+                    last_save = last_save.astimezone(paris_tz)
+        
                 last_save_str = last_save.strftime('%H:%M:%S')
-                st.caption(f"💾 Dernière sauvegarde : {last_save_str}")
-            except:
+                st.caption(f"💾 Dernière sauvegarde : {last_save_str} (heure de Paris)")
+            except Exception:
                 st.caption("💾 Sauvegarde automatique active")
         else:
             st.caption("💾 Sauvegarde automatique active")
