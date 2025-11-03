@@ -489,7 +489,7 @@ def render_budget_annuel_page():
                                 <div class="label">Total Heures (avec formation)</div>
                                 <div class="value">{total_heures_global:,.0f} h</div>
                             </div>
-                            <div class="kpi-card kpi-yellow">
+                            <div class="kpi-card kpi-amber">
                                 <div class="label">Total Coût (avec formation)</div>
                                 <div class="value">{total_cout_global:,.0f} CHF</div>
                             </div>
