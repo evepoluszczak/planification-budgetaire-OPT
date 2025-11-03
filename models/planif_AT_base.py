@@ -1,6 +1,3 @@
-"""
-Données de planification AT de base par jour-type et saison
-"""
 import numpy as np
 
 DATA = {

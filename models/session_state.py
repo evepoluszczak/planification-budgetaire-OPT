@@ -18,11 +18,11 @@ def initialize_session_state_2026():
     st.session_state.personnel = pd.DataFrame([
         {'Type': 'AT', 'Coût Horaire': 45.50},
         {'Type': 'ATR', 'Coût Horaire': 54.00},
-        {'Type': 'ATF', 'Coût Horaire': 54.00},
-        {'Type': 'CSC', 'Coût Horaire': 42.00},
-        {'Type': 'EES', 'Coût Horaire': 43.00},
-        {'Type': 'AT Resp', 'Coût Horaire': 54.00},
-        {'Type': 'Sect FR', 'Coût Horaire': 41.00},
+        {'Type': 'CSC', 'Coût Horaire': 45.50},
+        {'Type': 'EES', 'Coût Horaire': 45.50},
+        {'Type': 'ATF', 'Coût Horaire': 52.00},
+        {'Type': 'Coordinateur', 'Coût Horaire': 55.00},
+        {'Type': 'Sect FR', 'Coût Horaire': 53.15},
     ])
 
     # Saisons de référence
@@ -54,7 +54,8 @@ def initialize_session_state_2026():
         ],
         "EES": ['EES 1', 'EES 2', 'EES 3', 'EES 4', 'EES 5', 'EES 6', 'EES 7', 'EES 8'],
         "Sect. FR": ['Entrée Secteur France', 'Sortie Secteur France'],
-        "AT Resp.": ['AT Resp. Aile Est', 'AT Resp. CSC', 'Coordinateur']
+        "ATR": ['AT Resp. Aile Est', 'AT Resp. CSC'],
+        "Coordinateur": ['Coordinateur']
     }
 
     # Initialiser les données de planification
@@ -109,19 +110,21 @@ def initialize_session_state_2026():
                     ees_data[p] = ([0]*4 + [1]*36 + [0]*(len(TIME_SLOTS)-40))[:len(TIME_SLOTS)]
                 else:
                     # Pour tout autre périmètre EES (EES 8 par exemple)
-                    ees_data[p] = ([0]*4 + [1]*32 + [0]*(len(TIME_SLOTS)-36))[:len(TIME_SLOTS)]
+                    ees_data[p] = ([0]*(len(TIME_SLOTS)))[:len(TIME_SLOTS)]
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(ees_data, perims)
         elif cat == 'Sect. FR':
             sect_fr_data = {p: ([1]*41 + [0]*(len(TIME_SLOTS)-41))[:len(TIME_SLOTS)] for p in perims}
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(sect_fr_data, perims)
-        elif cat == 'AT Resp.':
+        elif cat == 'ATR':
             at_resp_data = {
                 'AT Resp. Aile Est': [0]*4 + [1]*28 + [0]*(len(TIME_SLOTS)-32),
-                'AT Resp. CSC': [1]*32 + [0]*(len(TIME_SLOTS)-32),
-                'Coordinateur': [1]*3 + [0]*(len(TIME_SLOTS)-3)
+                'AT Resp. CSC': [1]*32 + [0]*(len(TIME_SLOTS)-32)
             }
             full_at_resp_data = {p: at_resp_data.get(p, [0]*len(TIME_SLOTS)) for p in perims}
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(full_at_resp_data, perims)
+        elif cat == 'Coordinateur': 
+            coordinateur_data = {p: ([1]*31 + [0]*(len(TIME_SLOTS)-31))[:len(TIME_SLOTS)] for p in perims}
+            st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(coordinateur_data, perims)
         else:
             # Pour toute autre catégorie, grille vide par défaut
             st.session_state.planning_data[cat]['Default'] = pd.DataFrame(
