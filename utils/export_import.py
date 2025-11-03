@@ -84,6 +84,21 @@ def export_full_state():
             rules_df = rules_df.reindex(columns=column_order, fill_value="")
             rules_df.to_excel(writer, sheet_name='Besoin_Jour_Regles', index=False)
 
+        # Tables Formation/Doublure AT et Shift AT Formateurs
+        if 'budget_formation_at' in st.session_state and \
+           isinstance(st.session_state.budget_formation_at, pd.DataFrame) and \
+           not st.session_state.budget_formation_at.empty:
+            st.session_state.budget_formation_at.to_excel(
+                writer, sheet_name='Budget_Formation_AT', index=False
+            )
+
+        if 'budget_formateurs_at' in st.session_state and \
+           isinstance(st.session_state.budget_formateurs_at, pd.DataFrame) and \
+           not st.session_state.budget_formateurs_at.empty:
+            st.session_state.budget_formateurs_at.to_excel(
+                writer, sheet_name='Budget_Formateurs_AT', index=False
+            )
+
     return output.getvalue()
 
 
@@ -204,6 +219,43 @@ def load_data_from_excel(uploaded_file):
             # Fallback: charger depuis JSON
             st.session_state.besoin_jour_ops = load_rules_from_json(RULES_BESOIN_JOUR_PATH)
             st.info("Règles chargées depuis JSON local.")
+
+        # Tables Formation/Doublure AT et Shift AT Formateurs
+        if 'Budget_Formation_AT' in xls.sheet_names:
+            formation_df = pd.read_excel(xls, 'Budget_Formation_AT')
+            # Normaliser les types de données
+            if 'Effectif (pers.)' in formation_df.columns:
+                formation_df['Effectif (pers.)'] = pd.to_numeric(
+                    formation_df['Effectif (pers.)'], errors='coerce'
+                ).fillna(0).astype(int)
+            if 'Heures' in formation_df.columns:
+                formation_df['Heures'] = pd.to_numeric(
+                    formation_df['Heures'], errors='coerce'
+                ).fillna(0.0)
+            if 'Nbre de shifts' in formation_df.columns:
+                formation_df['Nbre de shifts'] = pd.to_numeric(
+                    formation_df['Nbre de shifts'], errors='coerce'
+                ).fillna(0).astype(int)
+            st.session_state.budget_formation_at = formation_df
+            st.info(f"Table Formation/Doublure AT chargée ({len(formation_df)} lignes).")
+
+        if 'Budget_Formateurs_AT' in xls.sheet_names:
+            formateurs_df = pd.read_excel(xls, 'Budget_Formateurs_AT')
+            # Normaliser les types de données
+            if 'Effectif (pers.)' in formateurs_df.columns:
+                formateurs_df['Effectif (pers.)'] = pd.to_numeric(
+                    formateurs_df['Effectif (pers.)'], errors='coerce'
+                ).fillna(0).astype(int)
+            if 'Heures' in formateurs_df.columns:
+                formateurs_df['Heures'] = pd.to_numeric(
+                    formateurs_df['Heures'], errors='coerce'
+                ).fillna(0.0)
+            if 'Nbre de shifts' in formateurs_df.columns:
+                formateurs_df['Nbre de shifts'] = pd.to_numeric(
+                    formateurs_df['Nbre de shifts'], errors='coerce'
+                ).fillna(0).astype(int)
+            st.session_state.budget_formateurs_at = formateurs_df
+            st.info(f"Table Shift AT Formateurs chargée ({len(formateurs_df)} lignes).")
 
         # Générer le budget automatiquement
         try:
