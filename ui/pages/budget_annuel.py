@@ -641,7 +641,11 @@ def render_budget_annuel_page():
                             chart = (bars + rule + label).properties(height=350)
                             
                             # 🟢 Instruction utilisateur
-                            st.markdown("_💡 Astuce : Shift+Click pour sélectionner plusieurs barres ou en retirer._")
+                            st.markdown(
+                                "<span style='font-size:0.85em; font-style:italic; color:#555;'>💡 Astuce : "
+                                "Shift+Click pour sélectionner plusieurs barres ou en retirer.</span>",
+                                unsafe_allow_html=True
+                            )
                             
                             st.altair_chart(chart, use_container_width=True)
 
