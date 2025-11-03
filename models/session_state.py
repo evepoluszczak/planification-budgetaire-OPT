@@ -83,10 +83,34 @@ def initialize_session_state_2026():
                 st.session_state.planning_data[cat][jour_saison] = parse_grid_from_markers(day_data, perims)
             # Ajouter aussi une grille "Default" (copie de Lundi Standard)
         elif cat == 'CSC':
-            csc_data = {p: [1]*34 + [0]*(len(TIME_SLOTS)-34) for p in perims}
+            # Distributions spécifiques par périmètre CSC
+            csc_data = {}
+            for p in perims:
+                if p in ['CSC 1 Dispatch E-gate', 'CSC 2 Assistant E-gate',
+                        'CSC 6 SR1 M Boosted', 'CSC 7 SR1 M Boosted',
+                        'CSC 8 SR1 M Boosted', 'CSC 9 SR1 M Boosted']:
+                    csc_data[p] = [1]*34 + [0]*(len(TIME_SLOTS)-34)
+                elif p == 'CSC 3 Dispatch PL / M 1-8':
+                    csc_data[p] = [1]*32 + [0]*(len(TIME_SLOTS)-32)
+                elif p == 'CSC 4 Dispatch M 9-16':
+                    csc_data[p] = [1]*30 + [0]*(len(TIME_SLOTS)-30)
+                elif p == 'CSC 5 Dispatch M Boosted':
+                    csc_data[p] = [1]*28 + [0]*(len(TIME_SLOTS)-28)
+                else:
+                    # Pour tout autre périmètre CSC non spécifié
+                    csc_data[p] = [1]*34 + [0]*(len(TIME_SLOTS)-34)
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(csc_data, perims)
         elif cat == 'EES':
-            ees_data = {p: ([0]*4 + [1]*32 + [0]*(len(TIME_SLOTS)-36))[:len(TIME_SLOTS)] for p in perims}
+            # Distributions spécifiques par périmètre EES
+            ees_data = {}
+            for p in perims:
+                if p in ['EES 1', 'EES 2', 'EES 3']:
+                    ees_data[p] = ([0]*4 + [1]*32 + [0]*(len(TIME_SLOTS)-36))[:len(TIME_SLOTS)]
+                elif p in ['EES 4', 'EES 5', 'EES 6', 'EES 7']:
+                    ees_data[p] = ([0]*4 + [1]*36 + [0]*(len(TIME_SLOTS)-40))[:len(TIME_SLOTS)]
+                else:
+                    # Pour tout autre périmètre EES (EES 8 par exemple)
+                    ees_data[p] = ([0]*4 + [1]*32 + [0]*(len(TIME_SLOTS)-36))[:len(TIME_SLOTS)]
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(ees_data, perims)
         elif cat == 'Sect. FR':
             sect_fr_data = {p: ([1]*41 + [0]*(len(TIME_SLOTS)-41))[:len(TIME_SLOTS)] for p in perims}
