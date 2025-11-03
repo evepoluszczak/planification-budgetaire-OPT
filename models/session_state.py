@@ -110,7 +110,7 @@ def initialize_session_state_2026():
                     ees_data[p] = ([0]*4 + [1]*36 + [0]*(len(TIME_SLOTS)-40))[:len(TIME_SLOTS)]
                 else:
                     # Pour tout autre périmètre EES (EES 8 par exemple)
-                    ees_data[p] = [0]*(len(TIME_SLOTS))[:len(TIME_SLOTS)]
+                    ees_data[p] = ([0]*(len(TIME_SLOTS)))[:len(TIME_SLOTS)]
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(ees_data, perims)
         elif cat == 'Sect. FR':
             sect_fr_data = {p: ([1]*41 + [0]*(len(TIME_SLOTS)-41))[:len(TIME_SLOTS)] for p in perims}
