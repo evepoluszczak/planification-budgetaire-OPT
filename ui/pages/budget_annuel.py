@@ -58,137 +58,7 @@ def render_budget_annuel_page():
 
         bs = st.session_state.get('budget_state', {})
         if bs and bs.get('year') == year:
-            # Synthèse Annuelle
-            with st.container(border=True):
-                st.subheader("Synthèse Annuelle")
-                totals = bs.get('totals', {})
-                total_heures_planif = totals.get('heures_annuel', 0.0)
-                total_cout_planif = totals.get('cout_annuel', 0.0)
-
-                # Calcul des heures/coûts de formation
-                total_heures_formation = 0.0
-                total_cout_formation = 0.0
-                if 'budget_formation_at' in st.session_state:
-                    df_formation = st.session_state.budget_formation_at.copy()
-                    # Normaliser les données
-                    df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formation['Heures'] = df_formation.get('Heures', 0).apply(
-                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
-                    ).clip(lower=0)
-                    df_formation['Nbre de shifts'] = pd.to_numeric(df_formation.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formation['Total (heures)'] = (
-                        df_formation['Effectif (pers.)'] *
-                        df_formation['Heures'] *
-                        df_formation['Nbre de shifts']
-                    )
-                    total_heures_formation = df_formation['Total (heures)'].sum()
-
-                    # Récupérer le coût horaire AT
-                    cout_horaire_at = 45.50
-                    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
-                        at_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'AT']
-                        if not at_row.empty:
-                            try:
-                                cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
-                            except:
-                                pass
-                    total_cout_formation = total_heures_formation * cout_horaire_at
-
-                # Calcul des heures/coûts formateurs
-                total_heures_formateurs = 0.0
-                total_cout_formateurs = 0.0
-                if 'budget_formateurs_at' in st.session_state:
-                    df_formateurs = st.session_state.budget_formateurs_at.copy()
-                    # Normaliser les données
-                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(
-                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
-                    ).clip(lower=0)
-                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formateurs['Total (heures)'] = (
-                        df_formateurs['Effectif (pers.)'] *
-                        df_formateurs['Heures'] *
-                        df_formateurs['Nbre de shifts']
-                    )
-                    total_heures_formateurs = df_formateurs['Total (heures)'].sum()
-
-                    # Récupérer le coût horaire ATF
-                    cout_horaire_atf = 54.00
-                    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
-                        atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
-                        if not atf_row.empty:
-                            try:
-                                cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
-                            except:
-                                pass
-                    total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
-
-                # Totaux globaux
-                total_heures_global = total_heures_planif + total_heures_formation + total_heures_formateurs
-                total_cout_global = total_cout_planif + total_cout_formation + total_cout_formateurs
-
-                st.markdown(
-                    f"""<div class="kpi-cards">
-                    <div class="kpi-card kpi-blue">
-                        <div class="label">Volume Heures Annuel (Planification)</div>
-                        <div class="value">{total_heures_planif:,.0f} h</div>
-                    </div>
-                    <div class="kpi-card kpi-amber">
-                        <div class="label">Coût Annuel (Planification)</div>
-                        <div class="value">{total_cout_planif:,.0f} CHF</div>
-                    </div>
-                    </div>""",
-                    unsafe_allow_html=True
-                )
-
-                if total_heures_formation > 0 or total_heures_formateurs > 0:
-                    cards_html = '<div class="kpi-cards">'
-
-                    if total_heures_formation > 0:
-                        cards_html += f'''
-                        <div class="kpi-card kpi-green">
-                            <div class="label">Formation / Doublure AT</div>
-                            <div class="value">{total_heures_formation:,.1f} h / {total_cout_formation:,.0f} CHF</div>
-                        </div>'''
-
-                    if total_heures_formateurs > 0:
-                        cards_html += f'''
-                        <div class="kpi-card kpi-green">
-                            <div class="label">Shift AT Formateurs</div>
-                            <div class="value">{total_heures_formateurs:,.1f} h / {total_cout_formateurs:,.0f} CHF</div>
-                        </div>'''
-
-                    cards_html += f'''
-                        <div class="kpi-card kpi-blue">
-                            <div class="label">TOTAL GÉNÉRAL (avec Formation/Formateurs)</div>
-                            <div class="value">{total_heures_global:,.0f} h / {total_cout_global:,.0f} CHF</div>
-                        </div>
-                        </div>'''
-
-                    st.markdown(cards_html, unsafe_allow_html=True)
-                st.markdown("---")
-                st.subheader("Répartition du Coût par Catégorie")
-                summary = bs.get('summary', pd.DataFrame())
-                if not summary.empty:
-                    col1, col2 = st.columns([0.4, 0.6])
-                    with col1:
-                        st.dataframe(
-                            summary.set_index('Catégorie').style.format({'Coût': '{:,.0f} CHF'}),
-                            use_container_width=True
-                        )
-                    with col2:
-                        try:
-                            chart = alt.Chart(summary).mark_bar().encode(
-                                x=alt.X('Catégorie:N', sort='-y', title=None),
-                                y=alt.Y('Coût:Q', title="Coût (CHF)"),
-                                tooltip=['Catégorie', alt.Tooltip('Coût:Q', format=',.0f')]
-                            ).properties(height=250)
-                            st.altair_chart(chart, use_container_width=True)
-                        except Exception as e:
-                            st.warning(f"Impossible d'afficher le graphique : {e}")
-                            st.bar_chart(summary.set_index('Catégorie'))
-                else:
-                    st.info("Aucun coût calculé (vérifiez l'association des coûts et les tarifs).")
+            # ========== TABLES ÉDITABLES D'ABORD (pour capturer les modifications) ==========
 
             # Formation / Doublure AT (hors planification)
             with st.container(border=True):
@@ -512,6 +382,136 @@ def render_budget_annuel_page():
                     st.metric("Total (HEURES)", f"{total_heures_formateurs:,.1f} h")
                 with col_tot2:
                     st.metric("Coût total (CHF)", f"{cout_total_formateurs:,.0f} CHF")
+
+            # ========== SYNTHÈSE ANNUELLE (affichée après les tables pour refléter les modifications) ==========
+            with st.container(border=True):
+                st.subheader("Synthèse Annuelle")
+                totals = bs.get('totals', {})
+                total_heures_planif = totals.get('heures_annuel', 0.0)
+                total_cout_planif = totals.get('cout_annuel', 0.0)
+
+                # Calcul des heures/coûts de formation (depuis session_state mis à jour)
+                total_heures_formation = 0.0
+                total_cout_formation = 0.0
+                cout_horaire_at = 45.50
+                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                    at_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'AT']
+                    if not at_row.empty:
+                        try:
+                            cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
+                        except:
+                            pass
+
+                if 'budget_formation_at' in st.session_state:
+                    df_formation = st.session_state.budget_formation_at.copy()
+                    # Normaliser les données
+                    df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formation['Heures'] = df_formation.get('Heures', 0).apply(
+                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                    ).clip(lower=0)
+                    df_formation['Nbre de shifts'] = pd.to_numeric(df_formation.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formation['Total (heures)'] = (
+                        df_formation['Effectif (pers.)'] *
+                        df_formation['Heures'] *
+                        df_formation['Nbre de shifts']
+                    )
+                    total_heures_formation = df_formation['Total (heures)'].sum()
+                    total_cout_formation = total_heures_formation * cout_horaire_at
+
+                # Calcul des heures/coûts formateurs (depuis session_state mis à jour)
+                total_heures_formateurs = 0.0
+                total_cout_formateurs = 0.0
+                cout_horaire_atf = 52.00
+                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                    atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
+                    if not atf_row.empty:
+                        try:
+                            cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
+                        except:
+                            pass
+
+                if 'budget_formateurs_at' in st.session_state:
+                    df_formateurs = st.session_state.budget_formateurs_at.copy()
+                    # Normaliser les données
+                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(
+                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                    ).clip(lower=0)
+                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formateurs['Total (heures)'] = (
+                        df_formateurs['Effectif (pers.)'] *
+                        df_formateurs['Heures'] *
+                        df_formateurs['Nbre de shifts']
+                    )
+                    total_heures_formateurs = df_formateurs['Total (heures)'].sum()
+                    total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
+
+                # Totaux globaux
+                total_heures_global = total_heures_planif + total_heures_formation + total_heures_formateurs
+                total_cout_global = total_cout_planif + total_cout_formation + total_cout_formateurs
+
+                st.markdown(
+                    f"""<div class="kpi-cards">
+                    <div class="kpi-card kpi-blue">
+                        <div class="label">Volume Heures Annuel (Planification)</div>
+                        <div class="value">{total_heures_planif:,.0f} h</div>
+                    </div>
+                    <div class="kpi-card kpi-amber">
+                        <div class="label">Coût Annuel (Planification)</div>
+                        <div class="value">{total_cout_planif:,.0f} CHF</div>
+                    </div>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+
+                if total_heures_formation > 0 or total_heures_formateurs > 0:
+                    cards_html = '<div class="kpi-cards">'
+
+                    if total_heures_formation > 0:
+                        cards_html += f'''
+                        <div class="kpi-card kpi-green">
+                            <div class="label">Formation / Doublure AT</div>
+                            <div class="value">{total_heures_formation:,.1f} h / {total_cout_formation:,.0f} CHF</div>
+                        </div>'''
+
+                    if total_heures_formateurs > 0:
+                        cards_html += f'''
+                        <div class="kpi-card kpi-green">
+                            <div class="label">Shift AT Formateurs</div>
+                            <div class="value">{total_heures_formateurs:,.1f} h / {total_cout_formateurs:,.0f} CHF</div>
+                        </div>'''
+
+                    cards_html += f'''
+                        <div class="kpi-card kpi-blue">
+                            <div class="label">TOTAL GÉNÉRAL (avec Formation/Formateurs)</div>
+                            <div class="value">{total_heures_global:,.0f} h / {total_cout_global:,.0f} CHF</div>
+                        </div>
+                        </div>'''
+
+                    st.markdown(cards_html, unsafe_allow_html=True)
+                st.markdown("---")
+                st.subheader("Répartition du Coût par Catégorie")
+                summary = bs.get('summary', pd.DataFrame())
+                if not summary.empty:
+                    col1, col2 = st.columns([0.4, 0.6])
+                    with col1:
+                        st.dataframe(
+                            summary.set_index('Catégorie').style.format({'Coût': '{:,.0f} CHF'}),
+                            use_container_width=True
+                        )
+                    with col2:
+                        try:
+                            chart = alt.Chart(summary).mark_bar().encode(
+                                x=alt.X('Catégorie:N', sort='-y', title=None),
+                                y=alt.Y('Coût:Q', title="Coût (CHF)"),
+                                tooltip=['Catégorie', alt.Tooltip('Coût:Q', format=',.0f')]
+                            ).properties(height=250)
+                            st.altair_chart(chart, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Impossible d'afficher le graphique : {e}")
+                            st.bar_chart(summary.set_index('Catégorie'))
+                else:
+                    st.info("Aucun coût calculé (vérifiez l'association des coûts et les tarifs).")
 
             # Détail Mensuel et Journalier
             with st.container(border=True):
