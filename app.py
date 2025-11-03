@@ -13,6 +13,7 @@ from core.data_loader import load_pax_data
 from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import start_pax_loading, check_pax_loading_status, get_pax_loading_info
+from utils.autosave import save_session_state_auto, load_session_state_auto, autosave_exists, get_autosave_info
 from ui.components import show_help_dialog, planning_editor_ui
 
 # =================== Configuration initiale ===================
@@ -51,7 +52,16 @@ if not st.session_state.data_loaded:
         st.rerun()
 
     st.header("Choisissez une option pour démarrer")
-    col1, col2 = st.columns(2)
+
+    # Vérifier si une sauvegarde automatique existe
+    has_autosave = autosave_exists()
+    autosave_info = get_autosave_info() if has_autosave else None
+
+    # Afficher 2 ou 3 colonnes selon la présence d'une sauvegarde automatique
+    if has_autosave:
+        col1, col2, col3 = st.columns(3)
+    else:
+        col1, col2 = st.columns(2)
 
     with col1:
         with st.container(border=True):
@@ -61,6 +71,7 @@ if not st.session_state.data_loaded:
                 try:
                     initialize_session_state_2026()
                     st.success("Données de base 2026 chargées.")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Erreur lors de l'initialisation des données 2026: {e}")
 
@@ -79,8 +90,54 @@ if not st.session_state.data_loaded:
                 else:
                     st.error(message)
 
+    # Option de sauvegarde automatique (uniquement si elle existe)
+    if has_autosave:
+        with col3:
+            with st.container(border=True):
+                st.subheader("Reprendre la session")
+                st.markdown("Restaurez votre dernière session sauvegardée automatiquement.")
+
+                if autosave_info and 'error' not in autosave_info:
+                    st.caption(f"📅 Sauvegardé le : {autosave_info.get('saved_at', 'inconnu')}")
+                    st.caption(f"📊 Taille : {autosave_info.get('file_size', 0) / 1024:.1f} Ko")
+
+                if st.button("Reprendre la session", use_container_width=True, type="secondary"):
+                    success, message = load_session_state_auto()
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+
 else:
     # =================== Interface principale (données chargées) ===================
+
+    # Fragment pour la sauvegarde automatique périodique (toutes les 2 minutes)
+    @st.fragment(run_every="120s")
+    def autosave_fragment():
+        """Fragment qui sauvegarde automatiquement l'état toutes les 2 minutes"""
+        if st.session_state.get('data_loaded', False):
+            try:
+                save_session_state_auto()
+                # Mettre à jour un timestamp pour tracking
+                st.session_state.last_autosave = dt.datetime.now().isoformat()
+            except Exception as e:
+                # Ne pas perturber l'utilisateur avec les erreurs d'autosave
+                pass
+
+    # Lancer le fragment d'autosave
+    autosave_fragment()
+
+    # Fonction helper pour changer de page avec autosave
+    def change_page(page_name):
+        """Change de page et déclenche une sauvegarde automatique"""
+        st.session_state.selected_page = page_name
+        # Sauvegarder avant de changer de page
+        try:
+            save_session_state_auto()
+        except:
+            pass  # Ne pas bloquer si la sauvegarde échoue
+        st.rerun()
 
     # Sidebar : Navigation et Export
 
@@ -95,12 +152,10 @@ else:
         st.markdown("#### Configuration Générale")
         if st.button("Configuration", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Configuration" else "secondary"):
-            st.session_state.selected_page = "Configuration"
-            st.rerun()
+            change_page("Configuration")
         if st.button("Planification", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Planification" else "secondary"):
-            st.session_state.selected_page = "Planification"
-            st.rerun()
+            change_page("Planification")
 
         st.divider()
 
@@ -108,16 +163,13 @@ else:
         st.markdown("#### Gestion du Budget")
         if st.button("Budget Annuel", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Budget Annuel" else "secondary"):
-            st.session_state.selected_page = "Budget Annuel"
-            st.rerun()
+            change_page("Budget Annuel")
         if st.button("Besoin Jour", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Besoin Jour" else "secondary"):
-            st.session_state.selected_page = "Besoin Jour"
-            st.rerun()
+            change_page("Besoin Jour")
         if st.button("Analyse Budgétaire", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Analyse Budgétaire" else "secondary"):
-            st.session_state.selected_page = "Analyse Budgétaire"
-            st.rerun()
+            change_page("Analyse Budgétaire")
 
         st.divider()
 
@@ -125,18 +177,29 @@ else:
         st.markdown("#### Outils")
         if st.button("Comparaison Historique", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Comparaison Historique" else "secondary"):
-            st.session_state.selected_page = "Comparaison Historique"
-            st.rerun()
+            change_page("Comparaison Historique")
         if st.button("Simulateur Objectif", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
-            st.session_state.selected_page = "Simulateur Objectif"
-            st.rerun()
+            change_page("Simulateur Objectif")
 
         page = st.session_state.selected_page
 
         # Bouton Mode d'emploi
         if st.button("❔ Mode d'emploi", use_container_width=True):
             show_help_dialog()
+
+        st.divider()
+
+        # Indicateur de sauvegarde automatique
+        if 'last_autosave' in st.session_state:
+            try:
+                last_save = dt.datetime.fromisoformat(st.session_state.last_autosave)
+                last_save_str = last_save.strftime('%H:%M:%S')
+                st.caption(f"💾 Dernière sauvegarde : {last_save_str}")
+            except:
+                st.caption("💾 Sauvegarde automatique active")
+        else:
+            st.caption("💾 Sauvegarde automatique active")
 
         st.divider()
 
