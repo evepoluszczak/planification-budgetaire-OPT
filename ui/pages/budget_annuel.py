@@ -482,15 +482,20 @@ def render_budget_annuel_page():
                     row1 += '</div>'
                     st.markdown(row1, unsafe_allow_html=True)
                 
-                    # Rangée 2 : TOTAL GÉNÉRAL (seul en dessous)
+                    # Rangée 2 : deux KPI (heures & coût) en dessous
                     st.markdown(f'''
                         <div class="kpi-cards">
                             <div class="kpi-card kpi-blue">
-                                <div class="label">TOTAL GÉNÉRAL (avec Formation/Formateurs)</div>
-                                <div class="value">{total_heures_global:,.0f} h / {total_cout_global:,.0f} CHF</div>
+                                <div class="label">Total Heures (avec formation)</div>
+                                <div class="value">{total_heures_global:,.0f} h</div>
+                            </div>
+                            <div class="kpi-card kpi-blue">
+                                <div class="label">Total Coût (avec formation)</div>
+                                <div class="value">{total_cout_global:,.0f} CHF</div>
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
+
 
                 st.markdown("---")
                 st.subheader("Répartition du Coût par Catégorie")
