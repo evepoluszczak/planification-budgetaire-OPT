@@ -94,9 +94,38 @@ def render_budget_annuel_page():
                                 pass
                     total_cout_formation = total_heures_formation * cout_horaire_at
 
+                # Calcul des heures/coûts formateurs
+                total_heures_formateurs = 0.0
+                total_cout_formateurs = 0.0
+                if 'budget_formateurs_at' in st.session_state:
+                    df_formateurs = st.session_state.budget_formateurs_at.copy()
+                    # Normaliser les données
+                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(
+                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                    ).clip(lower=0)
+                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formateurs['Total (heures)'] = (
+                        df_formateurs['Effectif (pers.)'] *
+                        df_formateurs['Heures'] *
+                        df_formateurs['Nbre de shifts']
+                    )
+                    total_heures_formateurs = df_formateurs['Total (heures)'].sum()
+
+                    # Récupérer le coût horaire ATF
+                    cout_horaire_atf = 54.00
+                    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                        atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
+                        if not atf_row.empty:
+                            try:
+                                cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
+                            except:
+                                pass
+                    total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
+
                 # Totaux globaux
-                total_heures_global = total_heures_planif + total_heures_formation
-                total_cout_global = total_cout_planif + total_cout_formation
+                total_heures_global = total_heures_planif + total_heures_formation + total_heures_formateurs
+                total_cout_global = total_cout_planif + total_cout_formation + total_cout_formateurs
 
                 st.markdown(
                     f"""<div class="kpi-cards">
@@ -112,20 +141,31 @@ def render_budget_annuel_page():
                     unsafe_allow_html=True
                 )
 
-                if total_heures_formation > 0:
-                    st.markdown(
-                        f"""<div class="kpi-cards">
+                if total_heures_formation > 0 or total_heures_formateurs > 0:
+                    cards_html = '<div class="kpi-cards">'
+
+                    if total_heures_formation > 0:
+                        cards_html += f'''
                         <div class="kpi-card kpi-green">
                             <div class="label">Formation / Doublure AT</div>
                             <div class="value">{total_heures_formation:,.1f} h / {total_cout_formation:,.0f} CHF</div>
-                        </div>
+                        </div>'''
+
+                    if total_heures_formateurs > 0:
+                        cards_html += f'''
+                        <div class="kpi-card kpi-green">
+                            <div class="label">Shift AT Formateurs</div>
+                            <div class="value">{total_heures_formateurs:,.1f} h / {total_cout_formateurs:,.0f} CHF</div>
+                        </div>'''
+
+                    cards_html += f'''
                         <div class="kpi-card kpi-blue">
-                            <div class="label">TOTAL GÉNÉRAL (avec Formation)</div>
+                            <div class="label">TOTAL GÉNÉRAL (avec Formation/Formateurs)</div>
                             <div class="value">{total_heures_global:,.0f} h / {total_cout_global:,.0f} CHF</div>
                         </div>
-                        </div>""",
-                        unsafe_allow_html=True
-                    )
+                        </div>'''
+
+                    st.markdown(cards_html, unsafe_allow_html=True)
                 st.markdown("---")
                 st.subheader("Répartition du Coût par Catégorie")
                 summary = bs.get('summary', pd.DataFrame())
@@ -314,6 +354,164 @@ def render_budget_annuel_page():
                     st.metric("Total (HEURES)", f"{total_heures_formation:,.1f} h")
                 with col_tot2:
                     st.metric("Coût total (CHF)", f"{cout_total_formation:,.0f} CHF")
+
+            # Shift AT Formateurs planifiés
+            with st.container(border=True):
+                st.subheader("Shift AT Formateurs planifiés")
+                st.markdown("Gérez les shifts des formateurs AT avec coût horaire ATF.")
+
+                # Récupérer le coût horaire ATF
+                cout_horaire_atf = 54.00  # Valeur par défaut
+                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                    personnel_df = st.session_state.personnel
+                    atf_row = personnel_df[personnel_df['Type'] == 'ATF']
+                    if not atf_row.empty:
+                        try:
+                            cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
+                        except:
+                            pass
+
+                st.caption(f"📌 Coût horaire ATF : **{cout_horaire_atf:.2f} CHF**")
+
+                # Initialiser le DataFrame si nécessaire
+                if 'budget_formateurs_at' not in st.session_state:
+                    st.session_state.budget_formateurs_at = pd.DataFrame([
+                        {'Dénomination': 'Formation (théorique) AT S26', 'Effectif (pers.)': 2, 'Heures': 17.0, 'Nbre de shifts': 1},
+                        {'Dénomination': 'Doublure formation (pratique) AT S26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 4},
+                        {'Dénomination': 'Formation (théorique) AT CHT W26', 'Effectif (pers.)': 2, 'Heures': 17.0, 'Nbre de shifts': 1},
+                        {'Dénomination': 'Doublure formation (pratique) AT CHT W26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 4},
+                        {'Dénomination': "Doublure Visitor's Center", 'Effectif (pers.)': 20, 'Heures': 4.0, 'Nbre de shifts': 1}
+                    ])
+
+                # Préparer le DataFrame pour l'édition
+                df_formateurs = st.session_state.budget_formateurs_at.copy()
+
+                # Normaliser et valider les données
+                if 'Effectif (pers.)' in df_formateurs.columns:
+                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs['Effectif (pers.)'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                if 'Heures' in df_formateurs.columns:
+                    df_formateurs['Heures'] = df_formateurs['Heures'].apply(
+                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                    )
+                    df_formateurs['Heures'] = df_formateurs['Heures'].clip(lower=0)
+                if 'Nbre de shifts' in df_formateurs.columns:
+                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs['Nbre de shifts'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+
+                # Calculer Total (heures)
+                df_formateurs['Total (heures)'] = (
+                    df_formateurs['Effectif (pers.)'] *
+                    df_formateurs['Heures'] *
+                    df_formateurs['Nbre de shifts']
+                )
+
+                # Configuration des colonnes pour l'éditeur
+                column_config_formateurs = {
+                    'Dénomination': st.column_config.TextColumn(
+                        'Dénomination',
+                        required=True,
+                        help='Description du shift formateur'
+                    ),
+                    'Effectif (pers.)': st.column_config.NumberColumn(
+                        'Effectif (pers.)',
+                        min_value=0,
+                        step=1,
+                        format='%d',
+                        required=True
+                    ),
+                    'Heures': st.column_config.NumberColumn(
+                        'Heures',
+                        min_value=0.0,
+                        step=0.5,
+                        format='%.1f',
+                        required=True,
+                        help='Durée en heures (décimales acceptées)'
+                    ),
+                    'Nbre de shifts': st.column_config.NumberColumn(
+                        'Nbre de shifts',
+                        min_value=0,
+                        step=1,
+                        format='%d',
+                        required=True
+                    ),
+                    'Total (heures)': st.column_config.NumberColumn(
+                        'Total (heures)',
+                        format='%.1f',
+                        disabled=True,
+                        help='Calculé automatiquement: Effectif × Heures × Nbre de shifts'
+                    )
+                }
+
+                # Éditeur de données
+                edited_formateurs = st.data_editor(
+                    df_formateurs,
+                    column_config=column_config_formateurs,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    hide_index=True,
+                    key="editor_formateurs_at"
+                )
+
+                # Recalculer avec les données éditées
+                edited_formateurs['Effectif (pers.)'] = pd.to_numeric(edited_formateurs['Effectif (pers.)'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                edited_formateurs['Heures'] = edited_formateurs['Heures'].apply(
+                    lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                ).clip(lower=0)
+                edited_formateurs['Nbre de shifts'] = pd.to_numeric(edited_formateurs['Nbre de shifts'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                edited_formateurs['Total (heures)'] = (
+                    edited_formateurs['Effectif (pers.)'] *
+                    edited_formateurs['Heures'] *
+                    edited_formateurs['Nbre de shifts']
+                )
+
+                # Sauvegarder dans session_state
+                st.session_state.budget_formateurs_at = edited_formateurs
+
+                # Boutons de gestion
+                col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+                with col_btn1:
+                    if st.button("➕ Ajouter une ligne", key="btn_add_formateurs"):
+                        new_row = pd.DataFrame([{
+                            'Dénomination': 'Nouveau shift formateur',
+                            'Effectif (pers.)': 0,
+                            'Heures': 0.0,
+                            'Nbre de shifts': 0,
+                            'Total (heures)': 0.0
+                        }])
+                        st.session_state.budget_formateurs_at = pd.concat(
+                            [st.session_state.budget_formateurs_at, new_row],
+                            ignore_index=True
+                        )
+                        st.rerun()
+
+                with col_btn2:
+                    if st.button("🔄 Réinitialiser", key="btn_reset_formateurs"):
+                        st.session_state.budget_formateurs_at = pd.DataFrame([
+                            {'Dénomination': 'Formation (théorique) AT S26', 'Effectif (pers.)': 2, 'Heures': 17.0, 'Nbre de shifts': 1},
+                            {'Dénomination': 'Doublure formation (pratique) AT S26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 4},
+                            {'Dénomination': 'Formation (théorique) AT CHT W26', 'Effectif (pers.)': 2, 'Heures': 17.0, 'Nbre de shifts': 1},
+                            {'Dénomination': 'Doublure formation (pratique) AT CHT W26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 4},
+                            {'Dénomination': "Doublure Visitor's Center", 'Effectif (pers.)': 20, 'Heures': 4.0, 'Nbre de shifts': 1}
+                        ])
+                        st.rerun()
+
+                with col_btn3:
+                    if st.button("🗑️ Vider la table", key="btn_clear_formateurs"):
+                        st.session_state.budget_formateurs_at = pd.DataFrame(columns=[
+                            'Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts', 'Total (heures)'
+                        ])
+                        st.rerun()
+
+                # Calcul des totaux
+                total_heures_formateurs = edited_formateurs['Total (heures)'].sum()
+                cout_total_formateurs = total_heures_formateurs * cout_horaire_atf
+
+                # Afficher les totaux
+                st.markdown("---")
+                col_tot1, col_tot2 = st.columns(2)
+                with col_tot1:
+                    st.metric("Total (HEURES)", f"{total_heures_formateurs:,.1f} h")
+                with col_tot2:
+                    st.metric("Coût total (CHF)", f"{cout_total_formateurs:,.0f} CHF")
 
             # Détail Mensuel et Journalier
             with st.container(border=True):

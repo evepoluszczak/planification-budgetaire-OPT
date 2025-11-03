@@ -18,6 +18,7 @@ def initialize_session_state_2026():
     st.session_state.personnel = pd.DataFrame([
         {'Type': 'AT', 'Coût Horaire': 45.50},
         {'Type': 'ATR', 'Coût Horaire': 54.00},
+        {'Type': 'ATF', 'Coût Horaire': 54.00},
         {'Type': 'CSC', 'Coût Horaire': 42.00},
         {'Type': 'EES', 'Coût Horaire': 43.00},
         {'Type': 'AT Resp', 'Coût Horaire': 54.00},
@@ -153,6 +154,16 @@ def initialize_session_state_2026():
             {'Dénomination': 'Refresher AT CDI', 'Effectif (pers.)': 0, 'Heures': 0.0, 'Nbre de shifts': 0},
             {'Dénomination': 'Cours FEU', 'Effectif (pers.)': 40, 'Heures': 3.0, 'Nbre de shifts': 1},
             {'Dénomination': 'Cours DEFI', 'Effectif (pers.)': 40, 'Heures': 2.0, 'Nbre de shifts': 1}
+        ])
+
+    # Initialiser la table Shift AT Formateurs planifiés
+    if 'budget_formateurs_at' not in st.session_state:
+        st.session_state.budget_formateurs_at = pd.DataFrame([
+            {'Dénomination': 'Formation (théorique) AT S26', 'Effectif (pers.)': 2, 'Heures': 17.0, 'Nbre de shifts': 1},
+            {'Dénomination': 'Doublure formation (pratique) AT S26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 4},
+            {'Dénomination': 'Formation (théorique) AT CHT W26', 'Effectif (pers.)': 2, 'Heures': 17.0, 'Nbre de shifts': 1},
+            {'Dénomination': 'Doublure formation (pratique) AT CHT W26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 4},
+            {'Dénomination': "Doublure Visitor's Center", 'Effectif (pers.)': 20, 'Heures': 4.0, 'Nbre de shifts': 1}
         ])
 
     st.session_state.data_loaded = True
