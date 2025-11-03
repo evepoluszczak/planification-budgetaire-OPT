@@ -204,7 +204,7 @@ else:
                     last_save = last_save.astimezone(paris_tz)
         
                 last_save_str = last_save.strftime('%H:%M:%S')
-                st.caption(f"💾 Dernière sauvegarde : {last_save_str}")
+                st.caption(f"💾 Dernière sauvegarde automatique : {last_save_str}")
             except Exception:
                 st.caption("💾 Sauvegarde automatique active")
         else:
