@@ -638,7 +638,7 @@ def render_budget_annuel_page():
                                 text=alt.Text('total_sel:Q', format=',.2f')
                             )
                             
-                            chart = (bars + rule + label).properties(height=350)
+                            chart = (bars + rule + label).properties(height=300)
                             
                             # 🟢 Instruction utilisateur
                             st.markdown(
