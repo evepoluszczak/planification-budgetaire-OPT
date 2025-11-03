@@ -24,7 +24,13 @@ JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanc
 SAISONS_ORDRE = ["Standard", "Été", "Ete", "Hiver"]
 
 # Créneaux horaires par défaut (de 04:00 à 23:30, pas de 30 minutes)
-TIME_SLOTS = [f"{h:02d}:{m:02d}" for h in range(4, 24) for m in (0, 30)]
+TIME_SLOTS = []
+for h in range(4, 25):  # 24 représente 00h
+    for m in (0, 30):
+        if h == 24 and m == 30:
+            break  # on s'arrête à 00:00
+        hour = h % 24
+        TIME_SLOTS.append(f"{hour:02d}:{m:02d}")
 
 # =================== CSS Global ===================
 GLOBAL_CSS = """
