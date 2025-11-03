@@ -619,9 +619,12 @@ def render_budget_annuel_page():
                     da_opt_at_cout += float(cout_total_formation)
                 
                 # ✅ Affichage heures + coût
-                st.caption(
-                    f"**DA OPT AT** : {da_opt_at_heures:,.1f} h / {da_opt_at_cout:,.0f} CHF  "
-                    "(AT + CSC + EES + Formation/Doublure AT)"
+                st.markdown(
+                    f"""
+                    **DA OPT AT** : {da_opt_at_heures:,.1f} h / {da_opt_at_cout:,.0f} CHF  
+                    *AT + CSC + EES + Formation/Doublure AT*
+                    """,
+                    unsafe_allow_html=True
                 )
 
             # Détail Mensuel et Journalier
