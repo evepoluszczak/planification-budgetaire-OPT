@@ -596,7 +596,6 @@ def render_budget_annuel_page():
                                 y=alt.Y('Coût_M:Q', title="Coût (M CHF)"),
                                 tooltip=[
                                     'Catégorie:N',
-                                    alt.Tooltip('Coût_M:Q', title='Coût (M CHF)', format=',.2f'),
                                     alt.Tooltip('Coût:Q',   title='Coût (CHF)',  format=',.0f')
                                 ]
                             ).properties(height=350)
