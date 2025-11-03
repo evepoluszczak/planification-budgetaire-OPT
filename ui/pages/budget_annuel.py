@@ -540,9 +540,35 @@ def render_budget_annuel_page():
                     ''', unsafe_allow_html=True)
 
 
+                # --- Répartition du Coût par Catégorie (avec ajouts Formation/Doublure AT & ATF) ---
                 st.markdown("---")
                 st.subheader("Répartition du Coût par Catégorie")
+
+                # Récupération du résumé tel que calculé par generate_budget_state
                 summary = bs.get('summary', pd.DataFrame())
+
+                # Normaliser les coûts (au cas où) et ajouter les lignes manquantes
+                def _ensure_numeric_cost(df: pd.DataFrame) -> pd.DataFrame:
+                    if 'Coût' in df.columns:
+                        df['Coût'] = pd.to_numeric(df['Coût'], errors='coerce').fillna(0.0).astype(float)
+                    return df
+
+                summary = _ensure_numeric_cost(summary)
+
+                # Les totaux formation/ATF ont été calculés plus haut dans "Synthèse Annuelle"
+                # -> total_cout_formation, total_cout_formateurs (et leurs heures associées)
+                extra_rows = pd.DataFrame([
+                    {'Catégorie': 'Formation/Doublure AT', 'Coût': float(total_cout_formation if "total_cout_formation" in locals() else 0.0)},
+                    {'Catégorie': 'ATF',                   'Coût': float(total_cout_formateurs if "total_cout_formateurs" in locals() else 0.0)}
+                ])
+
+                if summary.empty:
+                    summary = extra_rows.copy()
+                else:
+                    summary = pd.concat([summary, extra_rows], ignore_index=True)
+                    # Si la catégorie existait déjà, on agrège proprement
+                    summary = summary.groupby('Catégorie', as_index=False)['Coût'].sum()
+
                 if not summary.empty:
                     col1, col2 = st.columns([0.4, 0.6])
                     with col1:
@@ -563,6 +589,23 @@ def render_budget_annuel_page():
                             st.bar_chart(summary.set_index('Catégorie'))
                 else:
                     st.info("Aucun coût calculé (vérifiez l'association des coûts et les tarifs).")
+
+                # --- Information additionnelle : DA OPT AT ---
+                # DA OPT AT = Heures_AT + Heures_CSC + Heures_EES + Heures_Formation/Doublure AT
+                da_opt_at_heures = 0.0
+
+                calendar_df = bs.get('calendar_df', pd.DataFrame())
+                if not calendar_df.empty:
+                    for col in ['Heures_AT', 'Heures_CSC', 'Heures_EES']:
+                        if col in calendar_df.columns:
+                            da_opt_at_heures += pd.to_numeric(calendar_df[col], errors='coerce').fillna(0.0).sum()
+
+                # Ajoute la formation/doublure (calculée plus haut)
+                if 'total_heures_formation' in locals():
+                    da_opt_at_heures += float(total_heures_formation)
+
+                # Affichage sous la grille
+                st.caption(f"**DA OPT AT** : {da_opt_at_heures:,.1f} h (AT + CSC + EES + Formation/Doublure AT)")
 
             # Détail Mensuel et Journalier
             with st.container(border=True):
