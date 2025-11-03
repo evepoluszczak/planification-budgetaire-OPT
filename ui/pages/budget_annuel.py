@@ -605,7 +605,24 @@ def render_budget_annuel_page():
                     da_opt_at_heures += float(total_heures_formation)
 
                 # Affichage sous la grille
-                st.caption(f"**DA OPT AT** : {da_opt_at_heures:,.1f} h (AT + CSC + EES + Formation/Doublure AT)")
+                # Calcul du coût total associé aux heures DA OPT AT
+                da_opt_at_cout = 0.0
+                
+                # Ajoute les coûts associés dans calendar_df (AT, CSC, EES)
+                if not calendar_df.empty:
+                    for col in ['Coût_AT', 'Coût_CSC', 'Coût_EES']:
+                        if col in calendar_df.columns:
+                            da_opt_at_cout += pd.to_numeric(calendar_df[col], errors='coerce').fillna(0.0).sum()
+                
+                # Ajoute le coût des formations/doublures
+                if 'cout_total_formation' in locals():
+                    da_opt_at_cout += float(cout_total_formation)
+                
+                # ✅ Affichage heures + coût
+                st.caption(
+                    f"**DA OPT AT** : {da_opt_at_heures:,.1f} h / {da_opt_at_cout:,.0f} CHF  "
+                    "(AT + CSC + EES + Formation/Doublure AT)"
+                )
 
             # Détail Mensuel et Journalier
             with st.container(border=True):
