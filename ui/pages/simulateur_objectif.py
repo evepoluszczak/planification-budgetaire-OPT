@@ -106,11 +106,11 @@ def render_simulateur_objectif_page():
                         if f'distrib_pct_{cat}' not in st.session_state:
                             st.session_state[f'distrib_pct_{cat}'] = 0.0
 
+                        # Ne pas utiliser value= quand on utilise key= avec session_state
                         pct = st.number_input(
                             f"% {cat}",
                             min_value=0.0,
                             max_value=100.0,
-                            value=st.session_state[f'distrib_pct_{cat}'],
                             step=1.0,
                             key=f'distrib_pct_{cat}',
                             format="%.1f"

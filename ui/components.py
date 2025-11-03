@@ -18,10 +18,12 @@ def show_help_dialog():
         st.markdown(
             """
             <div class="objectif-container">
-                <h3>Objectif de l'outil</h3>
+                <h3>🎯 Objectif de l'outil</h3>
                 <div><b>✔ Construire</b> des grilles jour-type par catégorie pour estimer les heures et les coûts.</div>
                 <div><b>✔ Générer</b> un Budget Annuel consolidé à partir de ces grilles et du calendrier des saisons.</div>
                 <div><b>✔ Appliquer</b> des règles ponctuelles dans <i>Besoin Jour</i> pour ajuster certains jours/plages <b>sans modifier</b> les jours-types de base.</div>
+                <div><b>✔ Analyser</b> les écarts entre Budget, Budget Modifié et Réalisé avec visualisations.</div>
+                <div><b>✔ Comparer</b> avec l'historique et simuler des objectifs de coût.</div>
                 <div><b>✔ Exporter/Importer</b> un scénario complet pour le sauvegarder, le partager ou le reprendre plus tard.</div>
             </div>
             """,
@@ -30,25 +32,27 @@ def show_help_dialog():
 
     # Pré-requis
     with st.container(border=True):
-        st.markdown("### Pré-requis")
+        st.markdown("### 📋 Pré-requis")
         st.markdown(
             """
-            1. Démarrer en choisissant la **base 2026** (ou en chargeant un scénario `.xlsx` existant).
-            2. S'assurer que les **périmètres** par catégorie sont correctement définis.
-            3. Vérifier que les **tarifs horaires** du personnel sont à jour dans la page *Configuration*.
+            1. **Démarrage** : Choisir la base 2026 ou charger un scénario `.xlsx` existant.
+            2. **Configuration** : Vérifier les périmètres, tarifs horaires et associations de coûts.
+            3. **Données PAX** : Charger les fichiers Forecast et Historic depuis la sidebar (optionnel pour analyse).
+            4. **Facturation** : Placer les fichiers `Facturation Lot A MM.YYYY.xlsx` dans `input_files/facturation/` (pour page Analyse Budgétaire).
             """
         )
 
     # Parcours Recommandé
-    st.markdown("### Parcours Recommandé")
+    st.markdown("### 🗺️ Parcours Recommandé")
     st.markdown(
         """
         <div class="parcours-grid">
-          <div class="parcours-card"><h4>1. Configuration</h4><p>Vérifiez les tarifs, saisons de référence et périmètres.</p></div>
-          <div class="parcours-card"><h4>2. Planification</h4><p>Éditez ou créez les grilles pour chaque jour-type.</p></div>
-          <div class="parcours-card"><h4>3. Budget Annuel</h4><p>Générez la projection annuelle et analysez les coûts.</p></div>
-          <div class="parcours-card"><h4>4. Besoin Jour</h4><p>Appliquez des ajustements ponctuels si nécessaire.</p></div>
-          <div class="parcours-card"><h4>5. Export</h4><p>Sauvegardez votre scénario via la barre latérale.</p></div>
+          <div class="parcours-card"><h4>1. Configuration</h4><p>Tarifs, saisons, périmètres et associations de coûts.</p></div>
+          <div class="parcours-card"><h4>2. Planification</h4><p>Créer/éditer les grilles jour-type par catégorie.</p></div>
+          <div class="parcours-card"><h4>3. Budget Annuel</h4><p>Générer la projection annuelle et analyser.</p></div>
+          <div class="parcours-card"><h4>4. Besoin Jour</h4><p>Ajustements ponctuels pour événements spécifiques.</p></div>
+          <div class="parcours-card"><h4>5. Analyse Budgétaire</h4><p>Comparer Budget, Modifié et Réalisé.</p></div>
+          <div class="parcours-card"><h4>6. Outils</h4><p>Comparaison Historique et Simulateur Objectif.</p></div>
         </div>
         """,
         unsafe_allow_html=True
@@ -56,28 +60,128 @@ def show_help_dialog():
 
     st.divider()
 
+    # Description détaillée des pages
+    with st.expander("📖 Description détaillée des pages"):
+        st.markdown("""
+        #### 🔧 Configuration
+        - **Tarifs du personnel** : Définir les coûts horaires par type (AT, CSC, etc.)
+        - **Saisons** : Configurer les périodes (Standard, Été, Hiver, etc.)
+        - **Périmètres** : Définir les postes/zones par catégorie
+        - **Association des coûts** : Lier chaque catégorie à un type de personnel
+
+        #### 📅 Planification
+        - **Grilles jour-type** : Créer des modèles binaires (0/1) pour chaque combinaison Jour+Saison
+        - **Édition** : Modification cellule par cellule ou remplissage en masse
+        - **21 jours-types AT** : Base prédéfinie (Lundi Standard, Mardi Été, etc.)
+        - **Visualisation** : Graphiques en barres des effectifs par créneau
+
+        #### 💰 Budget Annuel
+        - **Génération** : Calcul automatique basé sur calendrier + grilles jour-type
+        - **Vue mensuelle** : Agrégation par mois avec coûts et heures
+        - **Vue journalière** : Détail jour par jour avec possibilité de filtrage
+        - **Export Excel** : Téléchargement du budget complet
+
+        #### 📆 Besoin Jour
+        - **Ajustements ponctuels** : Modifier des dates spécifiques SANS toucher aux jour-types
+        - **Règles** : Définir des modifications temporaires (événements, pics d'activité)
+        - **Impact recalculé** : Voir le Nouveau Coût Annuel après tous les ajustements
+        - **Données PAX** : Visualiser les prévisions de passagers pour contexte
+        - **Autosave** : Règles sauvegardées automatiquement dans `rules_besoin_jour.json`
+
+        #### 📊 Analyse Budgétaire
+        - **Comparaison tripartite** :
+          * Budget Annuel (prévision initiale)
+          * Budget Modifié (avec ajustements Besoin Jour)
+          * Réalisé (facturation effective)
+        - **Synthèse CHF et Heures** : KPI cards avec écarts en valeur et %
+        - **Courbes cumulées** : Évolution mensuelle des 3 budgets
+        - **Tableau détaillé** : Valeurs mensuelles non cumulées
+        - **Source Réalisé** : Fichiers dans `input_files/facturation/`
+
+        #### 📈 Comparaison Historique
+        - **Données PAX** : Compare Forecast vs Historic sur période commune
+        - **Graphiques** : Visualisation Schengen/Non-Schengen, Arrivée/Départ
+        - **Statistiques** : Moyennes, min, max par zone et flux
+
+        #### 🎯 Simulateur Objectif
+        - **Simulation d'impact** : Tester un objectif d'ajustement de coût (±)
+        - **Répartition** : Distribuer l'ajustement entre catégories (%)
+        - **Calcul heures** : Conversion automatique CHF → heures selon tarifs
+        - **Usage** : Outil de simulation, n'applique PAS de modifications
+        """)
+
     # Concepts Importants
     with st.container(border=True):
-        st.markdown("### Concepts Importants")
+        st.markdown("### 💡 Concepts Importants")
         st.markdown(
             """
-            - **Jour-type (JT)** : Modèle de planification (`Jour + Saison`). Grille binaire (0/1).
-            - **Périmètre** : Poste ou zone opérationnelle (ex: *Check in 1*).
-            - **Catégorie** : Regroupement de périmètres (AT, CSC, etc.).
-            - **Règle *Besoin Jour*** : Modification **temporaire** (dates spécifiques), n'altère pas les JTs.
-            - **Autosave** : Les règles *Besoin Jour* sont dans `rules_besoin_jour.json`.
+            - **Jour-type (JT)** : Modèle de planification (`Jour + Saison`). Grille binaire (0/1) représentant les présences par créneau.
+            - **Périmètre** : Poste ou zone opérationnelle (ex: *Check in 1*, *Porte A12*).
+            - **Catégorie** : Regroupement de périmètres avec même coût horaire (AT, CSC, etc.).
+            - **Règle Besoin Jour** : Modification **temporaire** appliquée à des dates spécifiques, n'altère PAS les jours-types de base.
+            - **Budget Annuel** : Prévision initiale basée uniquement sur jour-types et calendrier.
+            - **Budget Modifié** : Budget Annuel + ajustements Besoin Jour = "Nouveau Coût Annuel".
+            - **Réalisé** : Heures et coûts effectifs extraits des fichiers de facturation.
+            - **Données PAX** : Prévisions/historique de passagers (Forecast_pax.xlsx, Historic_pax.xlsx).
+            - **Autosave** : Règles Besoin Jour automatiquement dans `rules_besoin_jour.json`.
             """
         )
 
+    # Chargement des données
+    with st.container(border=True):
+        st.markdown("### 📂 Gestion des fichiers")
+        st.markdown("""
+        **Chargement PAX (Sidebar)** :
+        - Bouton "Lancer le chargement Pax" charge **Forecast** ET **Historic**
+        - Chargement en arrière-plan (app reste utilisable)
+        - Statut avec barre de progression
+        - Dates affichées en permanence une fois chargé
+
+        **Fichiers requis** :
+        - `input_files/Forecast_pax.xlsx` : Prévisions passagers
+        - `input_files/Historic_pax.xlsx` : Historique passagers
+        - `input_files/facturation/Facturation Lot A MM.YYYY.xlsx` : Fichiers mensuels de facturation
+
+        **Export/Import Scénario** :
+        - Export : Bouton "Télécharger Scénario (.xlsx)" dans sidebar
+        - Import : Uploader depuis page Configuration
+        - Contenu : Toutes les configurations, grilles et paramètres
+        """)
+
     # Checklist
-    st.success("✅ Checklist Rapide")
+    st.success("✅ Checklist Complète")
     st.markdown(
-        "- [ ] **Configuration** : Tarifs et périmètres OK.\n"
-        "- [ ] **Planification** : Jours-types nécessaires OK.\n"
-        "- [ ] **Budget Annuel** : Mapping coûts OK & Budget généré.\n"
-        "- [ ] **Besoin Jour** : Ajustements ponctuels OK (si besoin).\n"
-        "- [ ] **Export** : Scénario sauvegardé."
+        "**Configuration initiale** :\n"
+        "- [ ] Tarifs horaires définis pour tous les types de personnel\n"
+        "- [ ] Saisons configurées avec dates de début/fin\n"
+        "- [ ] Périmètres définis par catégorie\n"
+        "- [ ] Associations coûts créées (catégorie → type personnel)\n\n"
+        "**Planification** :\n"
+        "- [ ] Grilles jour-type créées/validées\n"
+        "- [ ] Jour-types AT chargés (21 modèles prédéfinis)\n\n"
+        "**Budget** :\n"
+        "- [ ] Budget Annuel généré\n"
+        "- [ ] Règles Besoin Jour appliquées (si nécessaire)\n\n"
+        "**Données externes** :\n"
+        "- [ ] Fichiers PAX chargés (optionnel)\n"
+        "- [ ] Fichiers facturation dans input_files/facturation/ (pour Analyse Budgétaire)\n\n"
+        "**Finalisation** :\n"
+        "- [ ] Scénario exporté et sauvegardé"
     )
+
+    st.divider()
+
+    # Astuces
+    with st.expander("💡 Astuces et bonnes pratiques"):
+        st.markdown("""
+        - **Remplissage en masse** : Utilisez l'outil dans chaque grille pour gagner du temps
+        - **Copie de jour-type** : Dans Planification, utilisez "Copier depuis" pour dupliquer une grille
+        - **Impact immédiat** : Les modifications de grilles recalculent automatiquement le budget
+        - **Règles vs Grilles** : Utilisez Besoin Jour pour les ajustements ponctuels, pas pour modifier les jours-types
+        - **Cohérence** : Budget Modifié (Analyse Budgétaire) = Nouveau Coût Annuel (Besoin Jour)
+        - **Export régulier** : Sauvegardez votre scénario fréquemment
+        - **Nom de fichier** : Le scénario exporté inclut l'année dans son nom
+        """)
 
     col1, col2, col3 = st.columns([0.5, 0.3, 0.3])
     with col2:
