@@ -578,10 +578,20 @@ def render_budget_annuel_page():
                         )
                     with col2:
                         try:
+                            # --- Prépare les données en millions ---
                             summary_m = summary.copy()
                             summary_m['Coût_M'] = summary_m['Coût'] / 1_000_000
                             
-                            chart = alt.Chart(summary_m).mark_bar().encode(
+                            # Sélection multi par clic (toggle) sur les barres
+                            sel = alt.selection_point(
+                                fields=['Catégorie'],
+                                on='click',
+                                toggle=True,     # clic successifs = multi-sélection
+                                empty='none'     # si rien n'est sélectionné, pas de règle
+                            )
+                            
+                            # Barres
+                            bars = alt.Chart(summary_m).mark_bar().encode(
                                 x=alt.X(
                                     'Catégorie:N',
                                     sort='-y',
@@ -593,14 +603,45 @@ def render_budget_annuel_page():
                                         labelOverlap=False
                                     )
                                 ),
-                                y=alt.Y('Coût_M:Q', title="Coût (M CHF)"),
+                                y=alt.Y('Coût_M:Q', title='Coût (M CHF)'),
                                 tooltip=[
-                                    'Catégorie:N',
+                                    alt.Tooltip('Catégorie:N', title='Catégorie'),
+                                    alt.Tooltip('Coût_M:Q', title='Coût (M CHF)', format=',.2f'),
                                     alt.Tooltip('Coût:Q',   title='Coût (CHF)',  format=',.0f')
-                                ]
-                            ).properties(height=350)
+                                ],
+                                # Optionnel : estomper les non sélectionnées
+                                opacity=alt.condition(sel, alt.value(1), alt.value(0.6))
+                            ).add_params(sel)
                             
+                            # Règle horizontale = somme des barres sélectionnées
+                            rule = alt.Chart(summary_m).transform_filter(
+                                sel
+                            ).transform_aggregate(
+                                total_sel='sum(Coût_M)'
+                            ).mark_rule(
+                                strokeDash=[6,4],
+                                size=2
+                            ).encode(
+                                y='total_sel:Q',
+                                tooltip=[alt.Tooltip('total_sel:Q', title='Total sélection (M CHF)', format=',.2f')]
+                            )
+                            
+                            # (Optionnel) petit marqueur + étiquette sur la règle
+                            label = alt.Chart(summary_m).transform_filter(
+                                sel
+                            ).transform_aggregate(
+                                total_sel='sum(Coût_M)'
+                            ).mark_text(
+                                dy=-6  # texte légèrement au-dessus de la règle
+                            ).encode(
+                                y='total_sel:Q',
+                                x=alt.value(5),  # marge à gauche; ajuste si besoin
+                                text=alt.Text('total_sel:Q', format=',.2f')
+                            )
+                            
+                            chart = (bars + rule + label).properties(height=350)
                             st.altair_chart(chart, use_container_width=True)
+
                         except Exception as e:
                             st.warning(f"Impossible d'afficher le graphique : {e}")
                             st.bar_chart(summary.set_index('Catégorie'))
