@@ -582,7 +582,7 @@ def render_budget_annuel_page():
                                 x=alt.X('Catégorie:N', sort='-y', title=None),
                                 y=alt.Y('Coût:Q', title="Coût (CHF)"),
                                 tooltip=['Catégorie', alt.Tooltip('Coût:Q', format=',.0f')]
-                            ).properties(height=250)
+                            ).properties(height=450)
                             st.altair_chart(chart, use_container_width=True)
                         except Exception as e:
                             st.warning(f"Impossible d'afficher le graphique : {e}")
