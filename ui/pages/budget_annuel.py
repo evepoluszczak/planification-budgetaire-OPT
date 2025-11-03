@@ -465,30 +465,33 @@ def render_budget_annuel_page():
                 )
 
                 if total_heures_formation > 0 or total_heures_formateurs > 0:
-                    cards_html = '<div class="kpi-cards">'
-
+                    # Rangée 1 : Formation / Doublure & Formateurs (côte à côte)
+                    row1 = '<div class="kpi-cards">'
                     if total_heures_formation > 0:
-                        cards_html += f'''
+                        row1 += f'''
                         <div class="kpi-card kpi-green">
                             <div class="label">Formation / Doublure AT</div>
                             <div class="value">{total_heures_formation:,.1f} h / {total_cout_formation:,.0f} CHF</div>
                         </div>'''
-
                     if total_heures_formateurs > 0:
-                        cards_html += f'''
+                        row1 += f'''
                         <div class="kpi-card kpi-green">
                             <div class="label">Shift AT Formateurs</div>
                             <div class="value">{total_heures_formateurs:,.1f} h / {total_cout_formateurs:,.0f} CHF</div>
                         </div>'''
-
-                    cards_html += f'''
-                        <div class="kpi-card kpi-blue">
-                            <div class="label">TOTAL GÉNÉRAL (avec Formation/Formateurs)</div>
-                            <div class="value">{total_heures_global:,.0f} h / {total_cout_global:,.0f} CHF</div>
+                    row1 += '</div>'
+                    st.markdown(row1, unsafe_allow_html=True)
+                
+                    # Rangée 2 : TOTAL GÉNÉRAL (seul en dessous)
+                    st.markdown(f'''
+                        <div class="kpi-cards">
+                            <div class="kpi-card kpi-blue">
+                                <div class="label">TOTAL GÉNÉRAL (avec Formation/Formateurs)</div>
+                                <div class="value">{total_heures_global:,.0f} h / {total_cout_global:,.0f} CHF</div>
+                            </div>
                         </div>
-                        </div>'''
+                    ''', unsafe_allow_html=True)
 
-                    st.markdown(cards_html, unsafe_allow_html=True)
                 st.markdown("---")
                 st.subheader("Répartition du Coût par Catégorie")
                 summary = bs.get('summary', pd.DataFrame())
