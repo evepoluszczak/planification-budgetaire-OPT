@@ -142,6 +142,19 @@ def initialize_session_state_2026():
     # Charger les règles Besoin Jour
     st.session_state.besoin_jour_ops = load_rules_from_json(RULES_BESOIN_JOUR_PATH)
 
+    # Initialiser la table Formation / Doublure AT
+    if 'budget_formation_at' not in st.session_state:
+        st.session_state.budget_formation_at = pd.DataFrame([
+            {'Dénomination': 'Formation (théorique) AT S26', 'Effectif (pers.)': 20, 'Heures': 17.0, 'Nbre de shifts': 1},
+            {'Dénomination': 'Formation (pratique) AT S26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 3},
+            {'Dénomination': 'Formation (théorique) AT CHT W26', 'Effectif (pers.)': 20, 'Heures': 17.0, 'Nbre de shifts': 1},
+            {'Dénomination': 'Formation (pratique) AT CHT W26', 'Effectif (pers.)': 20, 'Heures': 6.5, 'Nbre de shifts': 3},
+            {'Dénomination': "Formation Visitor's Center", 'Effectif (pers.)': 20, 'Heures': 4.0, 'Nbre de shifts': 1},
+            {'Dénomination': 'Refresher AT CDI', 'Effectif (pers.)': 0, 'Heures': 0.0, 'Nbre de shifts': 0},
+            {'Dénomination': 'Cours FEU', 'Effectif (pers.)': 40, 'Heures': 3.0, 'Nbre de shifts': 1},
+            {'Dénomination': 'Cours DEFI', 'Effectif (pers.)': 40, 'Heures': 2.0, 'Nbre de shifts': 1}
+        ])
+
     st.session_state.data_loaded = True
 
     # Générer le budget initial
