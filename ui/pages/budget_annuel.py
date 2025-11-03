@@ -42,8 +42,7 @@ def render_budget_annuel_page():
                            use_container_width=True, key="generate_budget_button"):
                     with st.spinner("Consolidation en cours…"):
                         generate_budget_state(year)
-                    if 'budget_state' in st.session_state and \
-                       st.session_state.budget_state.get('year') == year:
+                    if 'budget_state' in st.session_state and                        st.session_state.budget_state.get('year') == year:
                         st.success("Budget annuel généré avec succès !")
                     else:
                         st.error("La génération a échoué. Consultez les messages précédents.")
@@ -73,7 +72,7 @@ def render_budget_annuel_page():
                     if not at_row.empty:
                         try:
                             cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
-                        except:
+                        except Exception:
                             pass
 
                 st.caption(f"📌 Coût horaire AT : **{cout_horaire_at:.2f} CHF**")
@@ -100,7 +99,7 @@ def render_budget_annuel_page():
                     if col not in df_formation.columns:
                         if col == 'Dénomination':
                             df_formation[col] = ''
-                        elif col == 'Effectif (pers.)' or col == 'Nbre de shifts':
+                        elif col in ('Effectif (pers.)', 'Nbre de shifts'):
                             df_formation[col] = 0
                         else:  # Heures
                             df_formation[col] = 0.0
@@ -259,7 +258,7 @@ def render_budget_annuel_page():
                     if not atf_row.empty:
                         try:
                             cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
-                        except:
+                        except Exception:
                             pass
 
                 st.caption(f"📌 Coût horaire ATF : **{cout_horaire_atf:.2f} CHF**")
@@ -283,7 +282,7 @@ def render_budget_annuel_page():
                     if col not in df_formateurs.columns:
                         if col == 'Dénomination':
                             df_formateurs[col] = ''
-                        elif col == 'Effectif (pers.)' or col == 'Nbre de shifts':
+                        elif col in ('Effectif (pers.)', 'Nbre de shifts'):
                             df_formateurs[col] = 0
                         else:  # Heures
                             df_formateurs[col] = 0.0
@@ -442,7 +441,7 @@ def render_budget_annuel_page():
                     if not at_row.empty:
                         try:
                             cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
-                        except:
+                        except Exception:
                             pass
 
                 if 'budget_formation_at' in st.session_state:
@@ -470,7 +469,7 @@ def render_budget_annuel_page():
                     if not atf_row.empty:
                         try:
                             cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
-                        except:
+                        except Exception:
                             pass
 
                 if 'budget_formateurs_at' in st.session_state:
@@ -539,58 +538,59 @@ def render_budget_annuel_page():
                         </div>
                     ''', unsafe_allow_html=True)
 
-
-                # --- Répartition du Coût par Catégorie (avec ajouts Formation/Doublure AT & ATF) ---
+                # --- Répartition Coût et Heure par Catégorie ---
                 st.markdown("---")
-                st.subheader("Répartition du Coût par Catégorie")
+                st.subheader("Répartition Coût et Heure par Catégorie")
 
-                # Récupération du résumé tel que calculé par generate_budget_state
-                summary = bs.get('summary', pd.DataFrame())
+                # Onglets sous le titre
+                tab_cost, tab_hours = st.tabs(["Coût", "Heure"])
 
-                # Normaliser les coûts (au cas où) et ajouter les lignes manquantes
-                def _ensure_numeric_cost(df: pd.DataFrame) -> pd.DataFrame:
-                    if 'Coût' in df.columns:
-                        df['Coût'] = pd.to_numeric(df['Coût'], errors='coerce').fillna(0.0).astype(float)
-                    return df
+                # ===================== ONGLET COÛT =====================
+                with tab_cost:
+                    # Récupération du résumé tel que calculé par generate_budget_state
+                    summary = bs.get('summary', pd.DataFrame()).copy()
 
-                summary = _ensure_numeric_cost(summary)
+                    def _ensure_numeric_cost(df: pd.DataFrame) -> pd.DataFrame:
+                        if 'Coût' in df.columns:
+                            df['Coût'] = pd.to_numeric(df['Coût'], errors='coerce').fillna(0.0).astype(float)
+                        return df
 
-                # Les totaux formation/ATF ont été calculés plus haut dans "Synthèse Annuelle"
-                # -> total_cout_formation, total_cout_formateurs (et leurs heures associées)
-                extra_rows = pd.DataFrame([
-                    {'Catégorie': 'Formation/Doublure AT', 'Coût': float(total_cout_formation if "total_cout_formation" in locals() else 0.0)},
-                    {'Catégorie': 'ATF',                   'Coût': float(total_cout_formateurs if "total_cout_formateurs" in locals() else 0.0)}
-                ])
+                    summary = _ensure_numeric_cost(summary)
 
-                if summary.empty:
-                    summary = extra_rows.copy()
-                else:
-                    summary = pd.concat([summary, extra_rows], ignore_index=True)
-                    # Si la catégorie existait déjà, on agrège proprement
-                    summary = summary.groupby('Catégorie', as_index=False)['Coût'].sum()
+                    # Ajouter Formation/Doublure AT & ATF depuis les calculs de synthèse
+                    extra_rows = pd.DataFrame([
+                        {'Catégorie': 'Formation/Doublure AT', 'Coût': float(total_cout_formation if "total_cout_formation" in locals() else 0.0)},
+                        {'Catégorie': 'ATF',                   'Coût': float(total_cout_formateurs if "total_cout_formateurs" in locals() else 0.0)}
+                    ])
 
-                if not summary.empty:
-                    col1, col2 = st.columns([0.4, 0.6])
-                    with col1:
-                        st.dataframe(
-                            summary.set_index('Catégorie').style.format({'Coût': '{:,.0f} CHF'}),
-                            use_container_width=True
-                        )
-                    with col2:
-                        try:
-                            # --- Prépare les données en millions ---
-                            summary_m = summary.copy()
-                            summary_m['Coût_M'] = summary_m['Coût'] / 1_000_000
-                            
-                            # Sélection multi par clic (toggle) sur les barres
+                    if summary.empty:
+                        summary = extra_rows.copy()
+                    else:
+                        summary = pd.concat([summary, extra_rows], ignore_index=True)
+                        summary = summary.groupby('Catégorie', as_index=False)['Coût'].sum()
+
+                    if not summary.empty:
+                        # Prépare données en millions de CHF
+                        summary_m = summary.copy()
+                        summary_m['Coût_M'] = summary_m['Coût'] / 1_000_000
+
+                        col1, col2 = st.columns([0.44, 0.56])
+
+                        with col1:
+                            st.dataframe(
+                                summary.set_index('Catégorie').style.format({'Coût': '{:,.0f} CHF'}),
+                                use_container_width=True
+                            )
+
+                        with col2:
+                            # Sélection multi par clic
                             sel = alt.selection_point(
                                 fields=['Catégorie'],
                                 on='click',
-                                toggle=True,     # clic successifs = multi-sélection
-                                empty='none'     # si rien n'est sélectionné, pas de règle
+                                toggle=True,
+                                empty='none'
                             )
-                            
-                            # Barres
+
                             bars = alt.Chart(summary_m).mark_bar().encode(
                                 x=alt.X(
                                     'Catégorie:N',
@@ -599,20 +599,19 @@ def render_budget_annuel_page():
                                     axis=alt.Axis(
                                         labelFontSize=10,
                                         labelAngle=-30,
-                                        labelLimit=200,
+                                        labelLimit=220,
                                         labelOverlap=False
                                     )
                                 ),
                                 y=alt.Y('Coût_M:Q', title='Coût (M CHF)'),
                                 tooltip=[
                                     alt.Tooltip('Catégorie:N', title='Catégorie'),
+                                    alt.Tooltip('Coût_M:Q', title='Coût (M CHF)', format=',.2f'),
                                     alt.Tooltip('Coût:Q',   title='Coût (CHF)',  format=',.0f')
                                 ],
-                                # Optionnel : estomper les non sélectionnées
                                 opacity=alt.condition(sel, alt.value(1), alt.value(0.6))
                             ).add_params(sel)
-                            
-                            # Règle horizontale = somme des barres sélectionnées
+
                             rule = alt.Chart(summary_m).transform_filter(
                                 sel
                             ).transform_aggregate(
@@ -624,66 +623,153 @@ def render_budget_annuel_page():
                                 y='total_sel:Q',
                                 tooltip=[alt.Tooltip('total_sel:Q', title='Total sélection (M CHF)', format=',.2f')]
                             )
-                            
-                            # (Optionnel) petit marqueur + étiquette sur la règle
+
                             label = alt.Chart(summary_m).transform_filter(
                                 sel
                             ).transform_aggregate(
                                 total_sel='sum(Coût_M)'
                             ).mark_text(
-                                dy=-6  # texte légèrement au-dessus de la règle
+                                dy=-6
                             ).encode(
                                 y='total_sel:Q',
-                                x=alt.value(5),  # marge à gauche; ajuste si besoin
+                                x=alt.value(5),
                                 text=alt.Text('total_sel:Q', format=',.2f')
                             )
-                            
-                            chart = (bars + rule + label).properties(height=300)
-                            
-                            # 🟢 Instruction utilisateur
+
+                            chart_cost = (bars + rule + label).properties(height=350)
+
+                            # Astuce (petite police + italique)
                             st.markdown(
-                                "<span style='font-size:0.85em; font-style:italic; color:#555;'>💡 "
+                                "<span style='font-size:0.85em; font-style:italic; color:#555;'>💡 Astuce : "
                                 "Shift+Click pour sélectionner plusieurs barres ou en retirer.</span>",
                                 unsafe_allow_html=True
                             )
-                            
-                            st.altair_chart(chart, use_container_width=True)
+                            st.altair_chart(chart_cost, use_container_width=True)
+                    else:
+                        st.info("Aucun coût calculé (vérifiez l'association des coûts et les tarifs).")
 
-                        except Exception as e:
-                            st.warning(f"Impossible d'afficher le graphique : {e}")
-                            st.bar_chart(summary.set_index('Catégorie'))
-                else:
-                    st.info("Aucun coût calculé (vérifiez l'association des coûts et les tarifs).")
+                # ===================== ONGLET HEURE =====================
+                with tab_hours:
+                    calendar_df = bs.get('calendar_df', pd.DataFrame()).copy()
+                    if not calendar_df.empty:
+                        # Construire la table Heures par Catégorie depuis les colonnes Heures_*
+                        hour_cols = [c for c in calendar_df.columns if c.startswith('Heures_') and c != 'Heures_Total_Jour']
+                        heures_rows = []
+                        for c in hour_cols:
+                            cat = c.replace('Heures_', '')
+                            total_h = pd.to_numeric(calendar_df[c], errors='coerce').fillna(0.0).sum()
+                            heures_rows.append({'Catégorie': cat, 'Heures': float(total_h)})
+
+                        heures_df = pd.DataFrame(heures_rows)
+
+                        # Ajouter la Formation/Doublure AT (heures hors planif) et ATF (heures formateurs)
+                        if 'total_heures_formation' in locals():
+                            heures_df = pd.concat(
+                                [heures_df, pd.DataFrame([{'Catégorie': 'Formation/Doublure AT', 'Heures': float(total_heures_formation)}])],
+                                ignore_index=True
+                            )
+                        if 'total_heures_formateurs' in locals():
+                            heures_df = pd.concat(
+                                [heures_df, pd.DataFrame([{'Catégorie': 'ATF', 'Heures': float(total_heures_formateurs)}])],
+                                ignore_index=True
+                            )
+
+                        heures_df = heures_df.groupby('Catégorie', as_index=False)['Heures'].sum()
+
+                        col1h, col2h = st.columns([0.44, 0.56])
+                        with col1h:
+                            st.dataframe(
+                                heures_df.set_index('Catégorie').style.format({'Heures': '{:,.1f} h'}),
+                                use_container_width=True
+                            )
+
+                        with col2h:
+                            sel_h = alt.selection_point(
+                                fields=['Catégorie'],
+                                on='click',
+                                toggle=True,
+                                empty='none'
+                            )
+
+                            bars_h = alt.Chart(heures_df).mark_bar().encode(
+                                x=alt.X(
+                                    'Catégorie:N',
+                                    sort='-y',
+                                    title=None,
+                                    axis=alt.Axis(
+                                        labelFontSize=10,
+                                        labelAngle=-30,
+                                        labelLimit=220,
+                                        labelOverlap=False
+                                    )
+                                ),
+                                y=alt.Y('Heures:Q', title='Heures', axis=alt.Axis(format='.2s')),
+                                tooltip=[
+                                    alt.Tooltip('Catégorie:N', title='Catégorie'),
+                                    alt.Tooltip('Heures:Q', title='Heures', format=',.1f')
+                                ],
+                                opacity=alt.condition(sel_h, alt.value(1), alt.value(0.6))
+                            ).add_params(sel_h)
+
+                            rule_h = alt.Chart(heures_df).transform_filter(
+                                sel_h
+                            ).transform_aggregate(
+                                total_sel='sum(Heures)'
+                            ).mark_rule(
+                                strokeDash=[6,4],
+                                size=2
+                            ).encode(
+                                y='total_sel:Q',
+                                tooltip=[alt.Tooltip('total_sel:Q', title='Total sélection (h)', format=',.1f')]
+                            )
+
+                            label_h = alt.Chart(heures_df).transform_filter(
+                                sel_h
+                            ).transform_aggregate(
+                                total_sel='sum(Heures)'
+                            ).mark_text(
+                                dy=-6
+                            ).encode(
+                                y='total_sel:Q',
+                                x=alt.value(5),
+                                text=alt.Text('total_sel:Q', format=',.1f')
+                            )
+
+                            chart_hours = (bars_h + rule_h + label_h).properties(height=350)
+
+                            st.markdown(
+                                "<span style='font-size:0.85em; font-style:italic; color:#555;'>💡 Astuce : "
+                                "Shift+Click pour sélectionner plusieurs barres ou en retirer.</span>",
+                                unsafe_allow_html=True
+                            )
+                            st.altair_chart(chart_hours, use_container_width=True)
+                    else:
+                        st.info("Le détail des heures n'est pas disponible.")
 
                 # --- Information additionnelle : DA OPT AT ---
                 # DA OPT AT = Heures_AT + Heures_CSC + Heures_EES + Heures_Formation/Doublure AT
                 da_opt_at_heures = 0.0
 
-                calendar_df = bs.get('calendar_df', pd.DataFrame())
-                if not calendar_df.empty:
+                calendar_df_all = bs.get('calendar_df', pd.DataFrame())
+                if not calendar_df_all.empty:
                     for col in ['Heures_AT', 'Heures_CSC', 'Heures_EES']:
-                        if col in calendar_df.columns:
-                            da_opt_at_heures += pd.to_numeric(calendar_df[col], errors='coerce').fillna(0.0).sum()
+                        if col in calendar_df_all.columns:
+                            da_opt_at_heures += pd.to_numeric(calendar_df_all[col], errors='coerce').fillna(0.0).sum()
 
                 # Ajoute la formation/doublure (calculée plus haut)
                 if 'total_heures_formation' in locals():
                     da_opt_at_heures += float(total_heures_formation)
 
-                # Affichage sous la grille
                 # Calcul du coût total associé aux heures DA OPT AT
                 da_opt_at_cout = 0.0
-                
-                # Ajoute les coûts associés dans calendar_df (AT, CSC, EES)
-                if not calendar_df.empty:
+                if not calendar_df_all.empty:
                     for col in ['Coût_AT', 'Coût_CSC', 'Coût_EES']:
-                        if col in calendar_df.columns:
-                            da_opt_at_cout += pd.to_numeric(calendar_df[col], errors='coerce').fillna(0.0).sum()
-                
-                # Ajoute le coût des formations/doublures
+                        if col in calendar_df_all.columns:
+                            da_opt_at_cout += pd.to_numeric(calendar_df_all[col], errors='coerce').fillna(0.0).sum()
                 if 'cout_total_formation' in locals():
                     da_opt_at_cout += float(cout_total_formation)
-                
-                # ✅ Affichage heures + coût
+
+                # ✅ Affichage sur deux lignes (titre + italique dessous)
                 st.markdown(
                     f"""
                     **DA OPT AT** : {da_opt_at_heures:,.1f} h / {da_opt_at_cout:,.0f} CHF  
@@ -729,12 +815,10 @@ def render_budget_annuel_page():
                             category_cost_cols = [c.replace('Coût_', '') for c in cost_cols]
                             df_costs.columns = ['Mois'] + category_cost_cols
                             if category_cost_cols:
-                                # Convertir toutes les colonnes numériques en float et remplacer NaN
                                 for col in category_cost_cols:
                                     df_costs[col] = pd.to_numeric(
                                         df_costs[col], errors='coerce'
                                     ).fillna(0.0).astype(float)
-                                # Calculer le Total
                                 df_costs['Total'] = df_costs[category_cost_cols].sum(axis=1).astype(float)
                             else:
                                 df_costs['Total'] = 0.0
@@ -758,12 +842,10 @@ def render_budget_annuel_page():
                             category_hour_cols = [c.replace('Heures_', '') for c in hour_cols]
                             df_hours.columns = ['Mois'] + category_hour_cols
                             if category_hour_cols:
-                                # Convertir toutes les colonnes numériques en float et remplacer NaN
                                 for col in category_hour_cols:
                                     df_hours[col] = pd.to_numeric(
                                         df_hours[col], errors='coerce'
                                     ).fillna(0.0).astype(float)
-                                # Calculer le Total
                                 df_hours['Total'] = df_hours[category_hour_cols].sum(axis=1).astype(float)
                             else:
                                 df_hours['Total'] = 0.0
@@ -803,33 +885,24 @@ def render_budget_annuel_page():
                             ])
 
                             with tab_daily_cost:
-                                cols_to_show_cost = ['Date', 'Jour_Semaine'] + cost_cols + \
-                                                   ['Coût_Total_Jour']
+                                cols_to_show_cost = ['Date', 'Jour_Semaine'] + cost_cols + ['Coût_Total_Jour']
                                 df_daily_costs_view = df_daily_detail[cols_to_show_cost].copy()
-                                cost_view_cols_rename = {
-                                    c: c.replace('Coût_', '') for c in cost_cols
-                                }
+                                cost_view_cols_rename = {c: c.replace('Coût_', '') for c in cost_cols}
                                 cost_view_cols_rename['Coût_Total_Jour'] = 'Total'
                                 cost_view_cols_rename['Jour_Semaine'] = 'Jour'
-                                df_daily_costs_view = df_daily_costs_view.rename(
-                                    columns=cost_view_cols_rename
-                                )
+                                df_daily_costs_view = df_daily_costs_view.rename(columns=cost_view_cols_rename)
 
                                 numeric_cost_cols_daily = list(cost_view_cols_rename.values())
-                                if 'Date' in numeric_cost_cols_daily:
-                                    numeric_cost_cols_daily.remove('Date')
-                                if 'Jour' in numeric_cost_cols_daily:
-                                    numeric_cost_cols_daily.remove('Jour')
+                                for col in ('Date', 'Jour'):
+                                    if col in numeric_cost_cols_daily:
+                                        numeric_cost_cols_daily.remove(col)
                                 if numeric_cost_cols_daily:
-                                    df_daily_costs_view[numeric_cost_cols_daily] = \
-                                        df_daily_costs_view[numeric_cost_cols_daily].apply(
+                                    df_daily_costs_view[numeric_cost_cols_daily] =                                         df_daily_costs_view[numeric_cost_cols_daily].apply(
                                             pd.to_numeric, errors='coerce'
                                         ).fillna(0.0).astype(float)
 
                                 daily_cost_config = {
-                                    "Date": st.column_config.DateColumn(
-                                        "Date", format="DD/MM/YYYY"
-                                    ),
+                                    "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
                                     "Jour": st.column_config.TextColumn("Jour")
                                 }
                                 for cat_col in cost_view_cols_rename.values():
@@ -844,33 +917,24 @@ def render_budget_annuel_page():
                                 )
 
                             with tab_daily_hour:
-                                cols_to_show_hour = ['Date', 'Jour_Semaine'] + hour_cols + \
-                                                   ['Heures_Total_Jour']
+                                cols_to_show_hour = ['Date', 'Jour_Semaine'] + hour_cols + ['Heures_Total_Jour']
                                 df_daily_hours_view = df_daily_detail[cols_to_show_hour].copy()
-                                hour_view_cols_rename = {
-                                    c: c.replace('Heures_', '') for c in hour_cols
-                                }
+                                hour_view_cols_rename = {c: c.replace('Heures_', '') for c in hour_cols}
                                 hour_view_cols_rename['Heures_Total_Jour'] = 'Total'
                                 hour_view_cols_rename['Jour_Semaine'] = 'Jour'
-                                df_daily_hours_view = df_daily_hours_view.rename(
-                                    columns=hour_view_cols_rename
-                                )
+                                df_daily_hours_view = df_daily_hours_view.rename(columns=hour_view_cols_rename)
 
                                 numeric_hour_cols_daily = list(hour_view_cols_rename.values())
-                                if 'Date' in numeric_hour_cols_daily:
-                                    numeric_hour_cols_daily.remove('Date')
-                                if 'Jour' in numeric_hour_cols_daily:
-                                    numeric_hour_cols_daily.remove('Jour')
+                                for col in ('Date', 'Jour'):
+                                    if col in numeric_hour_cols_daily:
+                                        numeric_hour_cols_daily.remove(col)
                                 if numeric_hour_cols_daily:
-                                    df_daily_hours_view[numeric_hour_cols_daily] = \
-                                        df_daily_hours_view[numeric_hour_cols_daily].apply(
+                                    df_daily_hours_view[numeric_hour_cols_daily] =                                         df_daily_hours_view[numeric_hour_cols_daily].apply(
                                             pd.to_numeric, errors='coerce'
                                         ).fillna(0.0).astype(float)
 
                                 daily_hour_config = {
-                                    "Date": st.column_config.DateColumn(
-                                        "Date", format="DD/MM/YYYY"
-                                    ),
+                                    "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
                                     "Jour": st.column_config.TextColumn("Jour")
                                 }
                                 for cat_col in hour_view_cols_rename.values():
@@ -900,8 +964,7 @@ def render_budget_annuel_page():
 
             _ensure_adjusted_saisons_for_year(year)
 
-            if 'adjusted_saisons' not in st.session_state or \
-               st.session_state.adjusted_saisons.empty:
+            if 'adjusted_saisons' not in st.session_state or                st.session_state.adjusted_saisons.empty:
                 st.warning(f"Impossible de déterminer le calendrier des saisons pour {year}.")
             else:
                 col_edit, col_viz = st.columns([0.4, 0.6])
@@ -996,8 +1059,7 @@ def render_budget_annuel_page():
                     with cols[i % 3]:
                         current_personnel = cost_mapping.get(key)
                         try:
-                            default_idx = personnel_list.index(current_personnel) \
-                                         if current_personnel in personnel_list else 0
+                            default_idx = personnel_list.index(current_personnel)                                          if current_personnel in personnel_list else 0
                         except ValueError:
                             default_idx = 0
 
