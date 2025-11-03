@@ -606,7 +606,6 @@ def render_budget_annuel_page():
                                 y=alt.Y('Coût_M:Q', title='Coût (M CHF)'),
                                 tooltip=[
                                     alt.Tooltip('Catégorie:N', title='Catégorie'),
-                                    alt.Tooltip('Coût_M:Q', title='Coût (M CHF)', format=',.2f'),
                                     alt.Tooltip('Coût:Q',   title='Coût (CHF)',  format=',.0f')
                                 ],
                                 # Optionnel : estomper les non sélectionnées
@@ -640,6 +639,10 @@ def render_budget_annuel_page():
                             )
                             
                             chart = (bars + rule + label).properties(height=350)
+                            
+                            # 🟢 Instruction utilisateur
+                            st.markdown("_💡 Astuce : Shift+Click pour sélectionner plusieurs barres ou en retirer._")
+                            
                             st.altair_chart(chart, use_container_width=True)
 
                         except Exception as e:
