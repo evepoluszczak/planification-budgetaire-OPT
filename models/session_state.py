@@ -96,12 +96,11 @@ def initialize_session_state_2026():
                 'AT Resp. Aile Est': [0]*4 + [1]*28 + [0]*(len(TIME_SLOTS)-32),
                 'AT Resp. CSC': [1]*32 + [0]*(len(TIME_SLOTS)-32)
             }
+            full_at_resp_data = {p: at_resp_data.get(p, [0]*len(TIME_SLOTS)) for p in perims}
+            st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(full_at_resp_data, perims)
         elif cat == 'Coordinateur': 
             coordinateur_data = {p: ([1]*31 + [0]*(len(TIME_SLOTS)-31))[:len(TIME_SLOTS)] for p in perims}
             st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(coordinateur_data, perims)
-            
-            full_at_resp_data = {p: at_resp_data.get(p, [0]*len(TIME_SLOTS)) for p in perims}
-            st.session_state.planning_data[cat]['Default'] = parse_grid_from_markers(full_at_resp_data, perims)
         else:
             # Pour toute autre catégorie, grille vide par défaut
             st.session_state.planning_data[cat]['Default'] = pd.DataFrame(
