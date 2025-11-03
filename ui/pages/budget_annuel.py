@@ -578,11 +578,29 @@ def render_budget_annuel_page():
                         )
                     with col2:
                         try:
-                            chart = alt.Chart(summary).mark_bar().encode(
-                                x=alt.X('Catégorie:N', sort='-y', title=None),
-                                y=alt.Y('Coût:Q', title="Coût (CHF)"),
-                                tooltip=['Catégorie', alt.Tooltip('Coût:Q', format=',.0f')]
+                            summary_m = summary.copy()
+                            summary_m['Coût_M'] = summary_m['Coût'] / 1_000_000
+                            
+                            chart = alt.Chart(summary_m).mark_bar().encode(
+                                x=alt.X(
+                                    'Catégorie:N',
+                                    sort='-y',
+                                    title=None,
+                                    axis=alt.Axis(
+                                        labelFontSize=10,
+                                        labelAngle=-30,
+                                        labelLimit=200,
+                                        labelOverlap=False
+                                    )
+                                ),
+                                y=alt.Y('Coût_M:Q', title="Coût (M CHF)"),
+                                tooltip=[
+                                    'Catégorie:N',
+                                    alt.Tooltip('Coût_M:Q', title='Coût (M CHF)', format=',.2f'),
+                                    alt.Tooltip('Coût:Q',   title='Coût (CHF)',  format=',.0f')
+                                ]
                             ).properties(height=350)
+                            
                             st.altair_chart(chart, use_container_width=True)
                         except Exception as e:
                             st.warning(f"Impossible d'afficher le graphique : {e}")
