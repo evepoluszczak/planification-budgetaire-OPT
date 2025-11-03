@@ -91,29 +91,35 @@ def render_budget_annuel_page():
                         {'Dénomination': 'Cours DEFI', 'Effectif (pers.)': 40, 'Heures': 2.0, 'Nbre de shifts': 1}
                     ])
 
-                # Préparer le DataFrame pour l'édition
+                # Préparer le DataFrame pour l'édition (SANS la colonne Total)
                 df_formation = st.session_state.budget_formation_at.copy()
 
+                # S'assurer que seules les 4 colonnes éditables sont présentes
+                editable_cols = ['Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts']
+                for col in editable_cols:
+                    if col not in df_formation.columns:
+                        if col == 'Dénomination':
+                            df_formation[col] = ''
+                        elif col == 'Effectif (pers.)' or col == 'Nbre de shifts':
+                            df_formation[col] = 0
+                        else:  # Heures
+                            df_formation[col] = 0.0
+
+                # Ne garder que les colonnes éditables pour le data_editor
+                df_formation_edit = df_formation[editable_cols].copy()
+
                 # Normaliser et valider les données
-                if 'Effectif (pers.)' in df_formation.columns:
-                    df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation['Effectif (pers.)'], errors='coerce').fillna(0).astype(int).clip(lower=0)
-                if 'Heures' in df_formation.columns:
-                    # Convertir en float et accepter virgules
-                    df_formation['Heures'] = df_formation['Heures'].apply(
-                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
-                    )
-                    df_formation['Heures'] = df_formation['Heures'].clip(lower=0)
-                if 'Nbre de shifts' in df_formation.columns:
-                    df_formation['Nbre de shifts'] = pd.to_numeric(df_formation['Nbre de shifts'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                df_formation_edit['Effectif (pers.)'] = pd.to_numeric(
+                    df_formation_edit['Effectif (pers.)'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
+                df_formation_edit['Heures'] = df_formation_edit['Heures'].apply(
+                    lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                ).clip(lower=0)
+                df_formation_edit['Nbre de shifts'] = pd.to_numeric(
+                    df_formation_edit['Nbre de shifts'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
 
-                # Calculer Total (heures)
-                df_formation['Total (heures)'] = (
-                    df_formation['Effectif (pers.)'] *
-                    df_formation['Heures'] *
-                    df_formation['Nbre de shifts']
-                )
-
-                # Configuration des colonnes pour l'éditeur
+                # Configuration des colonnes pour l'éditeur (SANS Total)
                 column_config_formation = {
                     'Dénomination': st.column_config.TextColumn(
                         'Dénomination',
@@ -141,18 +147,12 @@ def render_budget_annuel_page():
                         step=1,
                         format='%d',
                         required=True
-                    ),
-                    'Total (heures)': st.column_config.NumberColumn(
-                        'Total (heures)',
-                        format='%.1f',
-                        disabled=True,
-                        help='Calculé automatiquement: Effectif × Heures × Nbre de shifts'
                     )
                 }
 
-                # Éditeur de données
+                # Éditeur de données (SANS la colonne Total)
                 edited_formation = st.data_editor(
-                    df_formation,
+                    df_formation_edit,
                     column_config=column_config_formation,
                     num_rows="dynamic",
                     use_container_width=True,
@@ -161,19 +161,41 @@ def render_budget_annuel_page():
                 )
 
                 # Recalculer avec les données éditées
-                edited_formation['Effectif (pers.)'] = pd.to_numeric(edited_formation['Effectif (pers.)'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                edited_formation['Effectif (pers.)'] = pd.to_numeric(
+                    edited_formation['Effectif (pers.)'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
                 edited_formation['Heures'] = edited_formation['Heures'].apply(
                     lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
                 ).clip(lower=0)
-                edited_formation['Nbre de shifts'] = pd.to_numeric(edited_formation['Nbre de shifts'], errors='coerce').fillna(0).astype(int).clip(lower=0)
-                edited_formation['Total (heures)'] = (
-                    edited_formation['Effectif (pers.)'] *
-                    edited_formation['Heures'] *
-                    edited_formation['Nbre de shifts']
+                edited_formation['Nbre de shifts'] = pd.to_numeric(
+                    edited_formation['Nbre de shifts'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
+
+                # Sauvegarder dans session_state (SANS la colonne Total)
+                st.session_state.budget_formation_at = edited_formation
+
+                # Calculer les totaux par ligne APRÈS l'édition
+                df_formation_display = edited_formation.copy()
+                df_formation_display['Total (heures)'] = (
+                    df_formation_display['Effectif (pers.)'] *
+                    df_formation_display['Heures'] *
+                    df_formation_display['Nbre de shifts']
                 )
 
-                # Sauvegarder dans session_state
-                st.session_state.budget_formation_at = edited_formation
+                # Afficher le tableau avec les totaux calculés (lecture seule)
+                st.caption("📊 Aperçu avec totaux calculés :")
+                st.dataframe(
+                    df_formation_display,
+                    column_config={
+                        'Dénomination': st.column_config.TextColumn('Dénomination'),
+                        'Effectif (pers.)': st.column_config.NumberColumn('Effectif (pers.)', format='%d'),
+                        'Heures': st.column_config.NumberColumn('Heures', format='%.1f'),
+                        'Nbre de shifts': st.column_config.NumberColumn('Nbre de shifts', format='%d'),
+                        'Total (heures)': st.column_config.NumberColumn('Total (heures)', format='%.1f')
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
 
                 # Boutons de gestion
                 col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
@@ -183,8 +205,7 @@ def render_budget_annuel_page():
                             'Dénomination': 'Nouvelle formation',
                             'Effectif (pers.)': 0,
                             'Heures': 0.0,
-                            'Nbre de shifts': 0,
-                            'Total (heures)': 0.0
+                            'Nbre de shifts': 0
                         }])
                         st.session_state.budget_formation_at = pd.concat(
                             [st.session_state.budget_formation_at, new_row],
@@ -209,12 +230,12 @@ def render_budget_annuel_page():
                 with col_btn3:
                     if st.button("🗑️ Vider la table", key="btn_clear_formation"):
                         st.session_state.budget_formation_at = pd.DataFrame(columns=[
-                            'Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts', 'Total (heures)'
+                            'Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts'
                         ])
                         st.rerun()
 
-                # Calcul des totaux
-                total_heures_formation = edited_formation['Total (heures)'].sum()
+                # Calcul des totaux (utiliser df_formation_display qui a la colonne Total calculée)
+                total_heures_formation = df_formation_display['Total (heures)'].sum()
                 cout_total_formation = total_heures_formation * cout_horaire_at
 
                 # Afficher les totaux
@@ -253,28 +274,35 @@ def render_budget_annuel_page():
                         {'Dénomination': "Doublure Visitor's Center", 'Effectif (pers.)': 20, 'Heures': 4.0, 'Nbre de shifts': 1}
                     ])
 
-                # Préparer le DataFrame pour l'édition
+                # Préparer le DataFrame pour l'édition (SANS la colonne Total)
                 df_formateurs = st.session_state.budget_formateurs_at.copy()
 
+                # S'assurer que seules les 4 colonnes éditables sont présentes
+                editable_cols = ['Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts']
+                for col in editable_cols:
+                    if col not in df_formateurs.columns:
+                        if col == 'Dénomination':
+                            df_formateurs[col] = ''
+                        elif col == 'Effectif (pers.)' or col == 'Nbre de shifts':
+                            df_formateurs[col] = 0
+                        else:  # Heures
+                            df_formateurs[col] = 0.0
+
+                # Ne garder que les colonnes éditables pour le data_editor
+                df_formateurs_edit = df_formateurs[editable_cols].copy()
+
                 # Normaliser et valider les données
-                if 'Effectif (pers.)' in df_formateurs.columns:
-                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs['Effectif (pers.)'], errors='coerce').fillna(0).astype(int).clip(lower=0)
-                if 'Heures' in df_formateurs.columns:
-                    df_formateurs['Heures'] = df_formateurs['Heures'].apply(
-                        lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
-                    )
-                    df_formateurs['Heures'] = df_formateurs['Heures'].clip(lower=0)
-                if 'Nbre de shifts' in df_formateurs.columns:
-                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs['Nbre de shifts'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                df_formateurs_edit['Effectif (pers.)'] = pd.to_numeric(
+                    df_formateurs_edit['Effectif (pers.)'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
+                df_formateurs_edit['Heures'] = df_formateurs_edit['Heures'].apply(
+                    lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
+                ).clip(lower=0)
+                df_formateurs_edit['Nbre de shifts'] = pd.to_numeric(
+                    df_formateurs_edit['Nbre de shifts'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
 
-                # Calculer Total (heures)
-                df_formateurs['Total (heures)'] = (
-                    df_formateurs['Effectif (pers.)'] *
-                    df_formateurs['Heures'] *
-                    df_formateurs['Nbre de shifts']
-                )
-
-                # Configuration des colonnes pour l'éditeur
+                # Configuration des colonnes pour l'éditeur (SANS Total)
                 column_config_formateurs = {
                     'Dénomination': st.column_config.TextColumn(
                         'Dénomination',
@@ -302,18 +330,12 @@ def render_budget_annuel_page():
                         step=1,
                         format='%d',
                         required=True
-                    ),
-                    'Total (heures)': st.column_config.NumberColumn(
-                        'Total (heures)',
-                        format='%.1f',
-                        disabled=True,
-                        help='Calculé automatiquement: Effectif × Heures × Nbre de shifts'
                     )
                 }
 
-                # Éditeur de données
+                # Éditeur de données (SANS la colonne Total)
                 edited_formateurs = st.data_editor(
-                    df_formateurs,
+                    df_formateurs_edit,
                     column_config=column_config_formateurs,
                     num_rows="dynamic",
                     use_container_width=True,
@@ -322,19 +344,41 @@ def render_budget_annuel_page():
                 )
 
                 # Recalculer avec les données éditées
-                edited_formateurs['Effectif (pers.)'] = pd.to_numeric(edited_formateurs['Effectif (pers.)'], errors='coerce').fillna(0).astype(int).clip(lower=0)
+                edited_formateurs['Effectif (pers.)'] = pd.to_numeric(
+                    edited_formateurs['Effectif (pers.)'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
                 edited_formateurs['Heures'] = edited_formateurs['Heures'].apply(
                     lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0
                 ).clip(lower=0)
-                edited_formateurs['Nbre de shifts'] = pd.to_numeric(edited_formateurs['Nbre de shifts'], errors='coerce').fillna(0).astype(int).clip(lower=0)
-                edited_formateurs['Total (heures)'] = (
-                    edited_formateurs['Effectif (pers.)'] *
-                    edited_formateurs['Heures'] *
-                    edited_formateurs['Nbre de shifts']
+                edited_formateurs['Nbre de shifts'] = pd.to_numeric(
+                    edited_formateurs['Nbre de shifts'], errors='coerce'
+                ).fillna(0).astype(int).clip(lower=0)
+
+                # Sauvegarder dans session_state (SANS la colonne Total)
+                st.session_state.budget_formateurs_at = edited_formateurs
+
+                # Calculer les totaux par ligne APRÈS l'édition
+                df_formateurs_display = edited_formateurs.copy()
+                df_formateurs_display['Total (heures)'] = (
+                    df_formateurs_display['Effectif (pers.)'] *
+                    df_formateurs_display['Heures'] *
+                    df_formateurs_display['Nbre de shifts']
                 )
 
-                # Sauvegarder dans session_state
-                st.session_state.budget_formateurs_at = edited_formateurs
+                # Afficher le tableau avec les totaux calculés (lecture seule)
+                st.caption("📊 Aperçu avec totaux calculés :")
+                st.dataframe(
+                    df_formateurs_display,
+                    column_config={
+                        'Dénomination': st.column_config.TextColumn('Dénomination'),
+                        'Effectif (pers.)': st.column_config.NumberColumn('Effectif (pers.)', format='%d'),
+                        'Heures': st.column_config.NumberColumn('Heures', format='%.1f'),
+                        'Nbre de shifts': st.column_config.NumberColumn('Nbre de shifts', format='%d'),
+                        'Total (heures)': st.column_config.NumberColumn('Total (heures)', format='%.1f')
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
 
                 # Boutons de gestion
                 col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
@@ -344,8 +388,7 @@ def render_budget_annuel_page():
                             'Dénomination': 'Nouveau shift formateur',
                             'Effectif (pers.)': 0,
                             'Heures': 0.0,
-                            'Nbre de shifts': 0,
-                            'Total (heures)': 0.0
+                            'Nbre de shifts': 0
                         }])
                         st.session_state.budget_formateurs_at = pd.concat(
                             [st.session_state.budget_formateurs_at, new_row],
@@ -367,12 +410,12 @@ def render_budget_annuel_page():
                 with col_btn3:
                     if st.button("🗑️ Vider la table", key="btn_clear_formateurs"):
                         st.session_state.budget_formateurs_at = pd.DataFrame(columns=[
-                            'Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts', 'Total (heures)'
+                            'Dénomination', 'Effectif (pers.)', 'Heures', 'Nbre de shifts'
                         ])
                         st.rerun()
 
-                # Calcul des totaux
-                total_heures_formateurs = edited_formateurs['Total (heures)'].sum()
+                # Calcul des totaux (utiliser df_formateurs_display qui a la colonne Total calculée)
+                total_heures_formateurs = df_formateurs_display['Total (heures)'].sum()
                 cout_total_formateurs = total_heures_formateurs * cout_horaire_atf
 
                 # Afficher les totaux
