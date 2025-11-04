@@ -192,22 +192,18 @@ def render_comparaison_historique_page():
             domain=['Pax Schengen', 'Pax Non-Schengen'],
             range=['#2E86C1', '#17A589']  # adapte à ta charte si besoin
         )
-
+        
         chart_compare = (
             alt.Chart(pax_long)
             .mark_bar()
             .encode(
                 x=alt.X('Heure:O', sort=None, title='Heure'),
                 y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
-                xOffset=alt.XOffset('Type:N', title='Type'),
-                tooltip=['Heure', 'Type', 'Zone', 'Passagers'],
-                color=alt.condition(
-                    alt.datum.Type == 'Historique',
-                    alt.Color('Zone:N', scale=gray_scale, legend=None),
-                    alt.Color('Zone:N', scale=brand_scale, legend=alt.Legend(title='Zone'))
-                )
+                xOffset='Type:N',  # <-- pas de title ici
+                color=alt.Color('Zone:N', title='Zone'),
+                tooltip=['Heure', 'Type', 'Zone', 'Passagers']
             )
-            .properties(height=400)
+            .properties()
             .interactive()
         )
 
