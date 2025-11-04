@@ -766,6 +766,39 @@ def render_budget_annuel_page():
                 # DA OPT AT = Heures_AT + Heures_CSC + Heures_EES + Heures_Formation/Doublure AT
                 da_opt_at_heures = 0.0
 
+                # --- Répartition des coûts liée (comptes internes) sous DA OPT AT ---
+                
+                def _sum_costs(calendar_df: pd.DataFrame, category_candidates):
+                    """Somme (CHF) des colonnes Coût_<Catégorie> pour une liste de variantes possibles."""
+                    total = 0.0
+                    if calendar_df is None or calendar_df.empty:
+                        return 0.0
+                    for cat in category_candidates:
+                        col = f"Coût_{cat}"
+                        if col in calendar_df.columns:
+                            total += pd.to_numeric(calendar_df[col], errors='coerce').fillna(0.0).sum()
+                    return float(total)
+                
+                # Variantes possibles pour 'Sect. FR' selon tes colonnes réelles
+                frais_surveillance = _sum_costs(calendar_df_all, ["Sect. FR", "Sect FR", "Secteur FR", "FR"])
+                
+                # Somme AT + EES
+                sous_traitance_assistance = _sum_costs(calendar_df_all, ["AT"]) + _sum_costs(calendar_df_all, ["EES"])
+                
+                # CSC seul
+                mandat_controle_surete = _sum_costs(calendar_df_all, ["CSC"])
+                
+                st.markdown(
+                    f"""
+                **Répartition des coûts (comptes internes)**  
+                - **318810 – Frais surveillance** : {frais_surveillance:,.0f} CHF  
+                - **318890 – Sous-traitance assistance passagers** : {sous_traitance_assistance:,.0f} CHF  
+                - **318940 – Mandat contrôle de sûreté** : {mandat_controle_surete:,.0f} CHF
+                """,
+                    unsafe_allow_html=True
+                )
+                
+
                 calendar_df_all = bs.get('calendar_df', pd.DataFrame())
                 if not calendar_df_all.empty:
                     for col in ['Heures_AT', 'Heures_CSC', 'Heures_EES']:
