@@ -193,29 +193,43 @@ def render_comparaison_historique_page():
             range=['#2E86C1', '#17A589']  # adapte à ta charte si besoin
         )
         
+        # Fusion Historique / Prévisions
+        pax_long['Zone_Type'] = pax_long['Zone'] + ' (' + pax_long['Type'] + ')'
+        
+        # Palette personnalisée : gris pour Historique, bleu/vert pour Prévisions
+        custom_scale = alt.Scale(
+            domain=[
+                'Pax Schengen (Historique)',
+                'Pax Non-Schengen (Historique)',
+                'Pax Schengen (Prévisions)',
+                'Pax Non-Schengen (Prévisions)'
+            ],
+            range=['#E0E0E0', '#A0A0A0', '#2E86C1', '#17A589']
+        )
+        
         chart_compare = (
             alt.Chart(pax_long)
             .mark_bar()
             .encode(
                 x=alt.X('Heure:O', sort=None, title='Heure'),
                 y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
-                xOffset='Type:N',  # <-- pas de title ici
-                color=alt.Color('Zone:N', title='Zone'),
+                xOffset='Type:N',
+                color=alt.Color('Zone_Type:N', title='Zone', scale=custom_scale),
                 tooltip=['Heure', 'Type', 'Zone', 'Passagers']
             )
-            .properties()
+            .properties(height=400)
             .interactive()
         )
-
-        # Petite astuce UI
+        
         st.markdown(
             "<span style='font-size:0.9em; font-style:italic; color:#666;'>"
-            "💡 Astuce : survolez une barre pour voir le détail, et utilisez l'outil de zoom/pan."
+            "💡 Astuce : survolez une barre pour voir le détail, et utilisez le zoom/pan Altair."
             "</span>",
             unsafe_allow_html=True
         )
-
+        
         st.altair_chart(chart_compare, use_container_width=True)
+
 
     else:
         st.info("Veuillez sélectionner une date historique et une date prévisionnelle.")
