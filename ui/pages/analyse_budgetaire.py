@@ -201,8 +201,11 @@ def _apply_pdf_category_mapping(pdf_df: pd.DataFrame) -> pd.DataFrame:
     # Récupérer le mapping depuis session_state
     mapping = st.session_state.get('pdf_category_mapping', {})
 
-    # Si pas de mapping ou mapping incomplet, créer/mettre à jour le mapping automatique
-    app_categories = list(st.session_state.get('perimetres', {}).keys())
+    # IMPORTANT: Les catégories de l'app sont les TYPES de Personnel (AT, ATR, Coordinateur, etc.)
+    # Pas les périmètres (qui sont les lieux/secteurs)
+    app_categories = []
+    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+        app_categories = st.session_state.personnel['Type'].unique().tolist()
 
     # Créer le mapping automatique pour toutes les catégories PDF
     auto_mapping = get_category_mapping_for_pdf(pdf_categories, app_categories)
@@ -228,7 +231,7 @@ def _apply_pdf_category_mapping(pdf_df: pd.DataFrame) -> pd.DataFrame:
 
         # Afficher les catégories disponibles pour info
         if app_categories:
-            st.info(f"📋 Catégories disponibles dans l'app: {', '.join(app_categories)}")
+            st.info(f"📋 Types de personnel disponibles: {', '.join(app_categories)}")
 
     # Appliquer le mapping
     result = apply_category_mapping(pdf_df, mapping)
