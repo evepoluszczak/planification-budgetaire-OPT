@@ -22,6 +22,18 @@ def _sync_budget_annuel_state():
                 df['Date Fin'] = pd.to_datetime(df['Date Fin']).dt.date
             st.session_state.adjusted_saisons = df
 
+    # Synchroniser les tables Formation/Formateurs depuis les widgets si disponibles
+    if 'editor_formation_at' in st.session_state:
+        # Le widget data_editor stocke son état dans session_state avec sa clé
+        widget_data = st.session_state.get('editor_formation_at')
+        if widget_data is not None and isinstance(widget_data, pd.DataFrame):
+            st.session_state.budget_formation_at = widget_data.copy()
+
+    if 'editor_formateurs_at' in st.session_state:
+        widget_data = st.session_state.get('editor_formateurs_at')
+        if widget_data is not None and isinstance(widget_data, pd.DataFrame):
+            st.session_state.budget_formateurs_at = widget_data.copy()
+
 
 def export_full_state():
     """Exporte l'état complet de l'application vers un fichier Excel"""
@@ -88,16 +100,20 @@ def export_full_state():
         if 'budget_formation_at' in st.session_state and \
            isinstance(st.session_state.budget_formation_at, pd.DataFrame) and \
            not st.session_state.budget_formation_at.empty:
-            st.session_state.budget_formation_at.to_excel(
+            df_formation_export = st.session_state.budget_formation_at.reset_index(drop=True)
+            df_formation_export.to_excel(
                 writer, sheet_name='Budget_Formation_AT', index=False
             )
+            st.info(f"✓ {len(df_formation_export)} lignes exportées pour Formation/Doublure AT")
 
         if 'budget_formateurs_at' in st.session_state and \
            isinstance(st.session_state.budget_formateurs_at, pd.DataFrame) and \
            not st.session_state.budget_formateurs_at.empty:
-            st.session_state.budget_formateurs_at.to_excel(
+            df_formateurs_export = st.session_state.budget_formateurs_at.reset_index(drop=True)
+            df_formateurs_export.to_excel(
                 writer, sheet_name='Budget_Formateurs_AT', index=False
             )
+            st.info(f"✓ {len(df_formateurs_export)} lignes exportées pour Shift AT Formateurs")
 
     return output.getvalue()
 

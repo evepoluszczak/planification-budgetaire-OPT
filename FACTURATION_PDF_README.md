@@ -13,32 +13,40 @@ F_5_XXXXXXX-YYYYMMDDHHMMSS.pdf
 ```
 
 **Exemples:**
-- `F_5_2609655-20251002095515.pdf` → Octobre 2025
-- `F_5_2624308-20251104112400.pdf` → Novembre 2025
+- `F_5_2609655-20251002095515.pdf` → Reçu le 2025-10-02 → **Facture de septembre 2025**
+- `F_5_2624308-20251104112400.pdf` → Reçu le 2025-11-04 → **Facture d'octobre 2025**
 
-**Extraction automatique:**
-- Le mois et l'année sont extraits du timestamp dans le nom de fichier
-- Format du timestamp: `YYYYMMDD` (Année-Mois-Jour)
+**⚠️ IMPORTANT - Extraction automatique:**
+- Le timestamp dans le nom de fichier correspond à la **date de réception** du document
+- Le mois facturé est le **mois précédent** la date de réception
+- Format du timestamp: `YYYYMMDDHHMMSS` (Année-Mois-Jour-Heure-Minute-Seconde)
+- L'application soustrait automatiquement 1 mois pour déterminer le mois facturé
 
 ### Contenu du PDF
 
-Le PDF doit contenir un tableau structuré avec:
-- **Catégories** (AT, ATR, Coordinateurs, ATF, CSC, Sect. France, etc.)
-- **Heures** par catégorie
-- **Coûts** par catégorie (optionnel mais recommandé)
+Le PDF doit contenir des lignes de facturation par catégorie. Deux formats sont supportés:
 
-**Exemple de structure:**
+**Format 1 (avec mots-clés):**
+```
+Heures AT : Quantité: 6 424.000 Prix: 45.50 Montant: 292 292.00
+Heures ATR: Quantité: 1 054.000 Prix: 54.00 Montant: 56 916.00
+Heures Coordinateurs: Quantité: 472.500 Prix: 55.00 Montant: 25 987.50
+```
 
+**Format 2 (sans mots-clés):**
 ```
-Catégorie          Heures      Coût
-----------------------------------------
-AT                 1234.50     56789.00
-Coordinateurs       234.50     12345.00
-CSC                 456.00     20000.00
-Sect. France        123.00      6500.00
-----------------------------------------
-TOTAL             2048.00     95634.00
+Heures AT: 6424.000 45.50 292292.00
+Heures Coordinateurs: 472.500 55.00 25987.50
+Heures CSC: 1585.000 45.50 72117.50
+Gestion d'accès: 1270.250 53.15 67513.79
+Visitor Center: 217.000 45.50 9873.50
 ```
+
+**Notes:**
+- L'application extrait automatiquement la **Quantité** (heures) et le **Montant** (coût)
+- Le prix unitaire est ignoré (il est recalculé si nécessaire)
+- Les espaces dans les grands nombres sont gérés automatiquement (ex: "6 424.000" → 6424.000)
+- Les catégories peuvent commencer par "Heures" ou directement par le nom de la catégorie
 
 ## 🔧 Installation
 
