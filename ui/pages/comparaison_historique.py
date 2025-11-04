@@ -224,7 +224,7 @@ def render_comparaison_historique_page():
                         titleAlign='center',
                         labelFontSize=11,
                         symbolSize=120,
-                        padding=100
+                        padding=10
                     )
                 ),
                 tooltip=['Heure', 'Type', 'Zone', 'Passagers']
