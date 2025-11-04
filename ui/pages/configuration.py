@@ -234,8 +234,10 @@ def render_configuration_page():
 
                 df_mapping = pd.DataFrame(mapping_data)
 
-                # Obtenir les catégories disponibles dans l'app
-                app_categories = list(st.session_state.get('perimetres', {}).keys())
+                # Obtenir les TYPES de personnel disponibles dans l'app (pas les périmètres!)
+                app_categories = []
+                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                    app_categories = st.session_state.personnel['Type'].unique().tolist()
                 app_categories.insert(0, '(Non mappée)')  # Option pour ne pas mapper
 
                 # Éditeur de mapping

@@ -81,7 +81,7 @@ def _infer_category_from_label(label: str) -> str:
     Mappe le libellé 'Heures XXX' vers une catégorie courte.
     L'ordre est important: ATF/ATR avant AT pour éviter les faux positifs.
     """
-    base = label.lower()
+    base = label.lower().strip()
 
     if "atf" in base:
         return "ATF"
@@ -95,8 +95,14 @@ def _infer_category_from_label(label: str) -> str:
         return "Gestion d'accès"
     if "visitor" in base:
         return "Visitor Center"
+
     # 'AT' doit venir après ATF/ATR pour ne pas les absorber
-    if re.search(r"\bat\b", base):
+    # Pattern plus flexible: cherche "at" en fin de mot ou isolé
+    # Exemples: "heures at", "heure at", "at"
+    if re.search(r"\bat\s*$", base) or re.search(r"\s+at\s*$", base) or base.endswith(" at"):
+        return "AT"
+    # Cas où AT est le seul mot après "Heures"
+    if re.sub(r"^heure(s)?\s*", "", base).strip() == "at":
         return "AT"
 
     # fallback: garder le dernier mot significatif après 'Heures'
@@ -182,7 +188,9 @@ def parse_invoice_pdf(pdf_path: Path) -> Dict:
             if all_matches:
                 st.info(f"🔍 {len(all_matches)} lignes de facturation détectées dans {pdf_path.name}")
                 for price, qty, label, amount in all_matches[:5]:  # Afficher max 5 premières
-                    st.caption(f"  → '{label}': {qty:.1f}h × {price:.2f} = {amount:.2f} CHF")
+                    # Afficher aussi la catégorie inférée pour debug
+                    cat_debug = _infer_category_from_label(label)
+                    st.caption(f"  → '{label}' → Catégorie: **{cat_debug}** | {qty:.1f}h × {price:.2f} = {amount:.2f} CHF")
                 if len(all_matches) > 5:
                     st.caption(f"  ... et {len(all_matches) - 5} autres lignes")
 
@@ -294,6 +302,7 @@ def get_category_mapping_for_pdf(pdf_categories: List[str], app_categories: List
 def load_pdf_facturation_data(factu_dir: Path, year: int) -> pd.DataFrame:
     """
     Charge toutes les factures PDF pour une année donnée.
+    Optimisé pour ne lire chaque PDF qu'une seule fois.
 
     Args:
         factu_dir: Répertoire contenant les factures
@@ -311,7 +320,9 @@ def load_pdf_facturation_data(factu_dir: Path, year: int) -> pd.DataFrame:
     all_data = []
     all_categories = set()
 
-    # Première passe: collecter toutes les catégories
+    # UNE SEULE passe: parser et collecter les données
+    parsed_results = []
+
     for pdf_path in factu_dir.glob(pattern):
         month_year = extract_month_year_from_pdf_filename(pdf_path.name)
         if month_year is None:
@@ -321,24 +332,20 @@ def load_pdf_facturation_data(factu_dir: Path, year: int) -> pd.DataFrame:
         if file_year != year:
             continue
 
-        data = parse_invoice_pdf(pdf_path)
-        if data and 'categories' in data:
-            all_categories.update(data['categories'].keys())
-
-    # Deuxième passe: construire le DataFrame
-    for pdf_path in factu_dir.glob(pattern):
-        month_year = extract_month_year_from_pdf_filename(pdf_path.name)
-        if month_year is None:
-            continue
-
-        month, file_year = month_year
-        if file_year != year:
-            continue
-
+        # Parser le PDF une seule fois
         data = parse_invoice_pdf(pdf_path)
         if not data or 'date' not in data:
             continue
 
+        # Stocker le résultat
+        parsed_results.append(data)
+
+        # Collecter toutes les catégories
+        if 'categories' in data:
+            all_categories.update(data['categories'].keys())
+
+    # Construire le DataFrame à partir des résultats parsés
+    for data in parsed_results:
         # Créer une ligne avec toutes les colonnes
         row = {'Date': data['date']}
 
