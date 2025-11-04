@@ -515,21 +515,26 @@ def render_budget_annuel_page():
                     .kpi-card .sub {
                         margin-top: .25rem;
                         font-size: .85em;
-                        color: #6b7280; /* gris neutre */
+                        color: #6b7280;
+                        line-height: 1.25;/* gris neutre */
                     }
                     </style>
                     """, unsafe_allow_html=True)
                 
                     # Sous-lignes (heures et coût)
                     breakdown_heures = (
-                        f"<div class='sub'>dont {total_heures_formation:,.1f} heure"
-                        f"{'' if abs(total_heures_formation - 1) < 1e-9 else 's'} Formation "
+                        "<div class='sub'>"
+                        "dont<br>"
+                        f"{total_heures_formation:,.1f} heure"
+                        f"{'' if abs(total_heures_formation - 1) < 1e-9 else 's'} Formation<br> "
                         f"et {total_heures_formateurs:,.1f} heure"
-                        f"{'' if abs(total_heures_formateurs - 1) < 1e-9 else 's'} de shifts AT</div>"
+                        f"{'' if abs(total_heures_formateurs - 1) < 1e-9 else 's'} de shifts ATF</div>"
                     )
                     breakdown_cout = (
-                        f"<div class='sub'>dont {total_cout_formation:,.0f} CHF Formation "
-                        f"et {total_cout_formateurs:,.0f} CHF de shifts AT</div>"
+                        "<div class='sub'>"
+                        "dont<br>"
+                        f"{total_cout_formation:,.0f} CHF Formation<br> "
+                        f"et {total_cout_formateurs:,.0f} CHF de shifts ATF</div>"
                     )
                 
                     # KPI Totaux (une seule rangée, avec sous-lignes)
