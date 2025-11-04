@@ -792,31 +792,27 @@ def render_budget_annuel_page():
                                 fields=["Catégorie"], on="click", toggle=True, empty="none"
                             )
 
-                            bars = (
-                                alt.Chart(summary_m)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X(
-                                        "Catégorie:N",
-                                        sort="-y",
-                                        title=None,
-                                        axis=alt.Axis(
-                                            labelFontSize=10,
-                                            labelAngle=-30,
-                                            labelLimit=220,
-                                            labelOverlap=False,
-                                        ),
-                                    ),
-                                    y=alt.Y("Coût_M:Q", title="Coût (M CHF)"),
-                                    tooltip=[
-                                        alt.Tooltip("Catégorie:N", title="Catégorie"),
-                                        alt.Tooltip("Coût_M:Q", title="Coût (M CHF)", format=",.2f"),
-                                        alt.Tooltip("Coût:Q", title="Coût (CHF)", format=",.0f"),
-                                    ],
-                                    opacity=alt.condition(sel, alt.value(1), alt.value(0.6)),
-                                )
-                                .add_params(sel)
+                        bars = (
+                            alt.Chart(summary_m)
+                            .transform_joinaggregate(total_all='sum(Coût)')
+                            .transform_calculate(pct='datum.Coût / datum.total_all')
+                            .mark_bar()
+                            .encode(
+                                x=alt.X(
+                                    'Catégorie:N', sort='-y', title=None,
+                                    axis=alt.Axis(labelFontSize=10, labelAngle=-30, labelLimit=220, labelOverlap=False)
+                                ),
+                                y=alt.Y('Coût_M:Q', title='Coût (M CHF)'),
+                                tooltip=[
+                                    alt.Tooltip('Catégorie:N', title='Catégorie'),
+                                    alt.Tooltip('Coût_M:Q', title='Coût (M CHF)', format=',.2f'),
+                                    alt.Tooltip('Coût:Q',   title='Coût (CHF)',  format=',.0f'),
+                                    alt.Tooltip('pct:Q',    title='% du total',  format='.1%'),   # 👈 new
+                                ],
+                                opacity=alt.condition(sel, alt.value(1), alt.value(0.6))
                             )
+                            .add_params(sel)
+                        )
 
                             rule = (
                                 alt.Chart(summary_m)
@@ -916,31 +912,29 @@ def render_budget_annuel_page():
                                 fields=["Catégorie"], on="click", toggle=True, empty="none"
                             )
 
-                            bars_h = (
-                                alt.Chart(heures_df)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X(
-                                        "Catégorie:N",
-                                        sort="-y",
-                                        title=None,
-                                        axis=alt.Axis(
-                                            labelFontSize=10,
-                                            labelAngle=-30,
-                                            labelLimit=220,
-                                            labelOverlap=False,
-                                        ),
-                                    ),
-                                    y=alt.Y("Heures:Q", title="Heures", axis=alt.Axis(format=".2s")),
+                        bars_h = (
+                            alt.Chart(heures_df)
+                            .transform_joinaggregate(total_all='sum(Heures)')
+                            .transform_calculate(pct='datum.Heures / datum.total_all')
+                            .mark_bar()
+                            .encode(
+                                x=alt.X(
+                                    'Catégorie:N', sort='-y', title=None,
+                                    axis=alt.Axis(labelFontSize=10, labelAngle=-30, labelLimit=220, labelOverlap=False)
+                                ),
+                                y=alt.Y('Heures:Q', title='Heures', axis=alt.Axis(format='.2s')),
                                     tooltip=[
-                                        alt.Tooltip("Catégorie:N", title="Catégorie"),
-                                        alt.Tooltip("Heures:Q", title="Heures", format=",.1f"),
-                                    ],
-                                    opacity=alt.condition(sel_h, alt.value(1), alt.value(0.6)),
-                                )
-                                .add_params(sel_h)
+                                    alt.Tooltip('Catégorie:N', title='Catégorie'),
+                                    alt.Tooltip('Heures:Q',    title='Heures',     format=',.1f'),
+                                    alt.Tooltip('pct:Q',       title='% du total', format='.1%'),  # 👈 new
+                                ],
+                                opacity=alt.condition(sel_h, alt.value(1), alt.value(0.6))
                             )
-
+                            .add_params(sel_h)
+                        )
+                        
+                        # (rule_h / label_h unchanged)
+                            
                             rule_h = (
                                 alt.Chart(heures_df)
                                 .transform_filter(sel_h)
