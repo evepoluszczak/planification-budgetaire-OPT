@@ -211,20 +211,18 @@ def render_comparaison_historique_page():
             alt.Chart(pax_long)
             .mark_bar()
             .encode(
-                x=alt.X('Heure:O', sort=None, title=''),
+                x=alt.X('Heure:O', sort=None, title='Heure'),
                 y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
                 xOffset='Type:N',
                 color=alt.Color(
-                    
                     'Zone_Type:N',
-                    title='',
+                    title='Catégorie',
                     scale=custom_scale,
                     legend=alt.Legend(
-                        orient='bottom',          # Légende sous le graphe
-                        direction='horizontal',
-                        labelAlign='center',
-                        titleAlign='center',
-                        labelFontSize=11,
+                        orient='bottom',          # légende sous le graphe
+                        direction='horizontal',   # horizontale
+                        labelAlign='center',      # centre les libellés
+                        titleAlign='center',      # centre le titre de légende
                         symbolSize=120,
                         padding=10
                     )
