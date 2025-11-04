@@ -219,10 +219,10 @@ def render_comparaison_historique_page():
                     title='Catégorie',
                     scale=custom_scale,
                     legend=alt.Legend(
-                        orient='bottom',          # légende sous le graphe
-                        direction='horizontal',   # horizontale
-                        labelAlign='center',      # centre les libellés
-                        titleAlign='center',      # centre le titre de légende
+                        orient='bottom',          # Légende sous le graphe
+                        direction='horizontal',   # Alignée horizontalement
+                        titleAlign='center',
+                        labelFontSize=11,
                         symbolSize=120,
                         padding=10
                     )
@@ -232,7 +232,6 @@ def render_comparaison_historique_page():
             .properties(height=400)
             .interactive()
         )
-        
         st.altair_chart(chart_compare, use_container_width=True)
 
 
