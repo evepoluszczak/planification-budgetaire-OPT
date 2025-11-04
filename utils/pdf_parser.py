@@ -1,513 +1,343 @@
-"""
-Parser robuste pour les factures PDF mensuelles OPT
-
-Fonctionnalités :
-- Capture la 1ère ligne "Heures AT" (pas de gate/skip)
-- Nettoyage des caractères invisibles (NBSP, ligatures)
-- Parsing robuste tables + texte
-- Déduplication par hash de fichier + (Catégorie, Heures, Coût)
-- Cache Streamlit optionnel
-"""
+# utils/pdf_parser.py
 from __future__ import annotations
-import re
 import hashlib
-import unicodedata
+import re
 import datetime as dt
 from pathlib import Path
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, List, Iterable, Optional
 
 import pandas as pd
-import streamlit as st
 
-# --- Imports PDF avec fallback ---
 try:
     import pdfplumber
     PDF_AVAILABLE = True
-except ImportError:
-    pdfplumber = None
+except Exception:
     PDF_AVAILABLE = False
 
-try:
-    from PyPDF2 import PdfReader
-    PYPDF2_AVAILABLE = True
-except ImportError:
-    PdfReader = None
-    PYPDF2_AVAILABLE = False
 
-if not PDF_AVAILABLE and not PYPDF2_AVAILABLE:
-    st.warning("⚠️ Aucune bibliothèque PDF disponible (pdfplumber ou PyPDF2). Les factures PDF ne peuvent pas être lues.")
+# ---------- Helpers ----------
 
+_NUM_RE = re.compile(r"[^\d,.\-]")  # supprime tout sauf chiffre / séparateurs
+_FN_DATE_RE = re.compile(r".*-(\d{8})\d{6}\.pdf$", re.IGNORECASE)  # ...-yyyymmddHHMMSS.pdf
+_FN_YYYYMM_RE = re.compile(r".*-(\d{6})\d{2}\d{6}\.pdf$", re.IGNORECASE) # ...-yyyymm...... (sécurité)
 
-# --- Catégories acceptées + alias possibles ---
-CATEGORY_ALIASES = {
-    "AT": ["AT", "Heures AT", "Heure AT", "AT (heures)", "Assistants Tarmac"],
-    "ATR": ["ATR", "Heures ATR", "Heure ATR"],
-    "Coordinateurs": ["Coordinateurs", "Coordinateur", "Coord", "Heures Coordinateurs", "Heure Coordinateurs"],
-    "ATF": ["ATF", "Heures ATF", "Heure ATF", "Formateurs AT"],
-    "CSC": ["CSC", "Heures CSC", "Heure CSC"],
-    "Gestion d'accès": ["Gestion d'accès", "Gestion d'acces", "Gestion acces", "Gestion d accès"],
-    "Visitor Center": ["Visitor Center", "Visitor Centre", "Visitors Center"],
-    "EES": ["EES", "Heures EES", "Heure EES"],
-}
-
-# Pattern générique : capture heures & coût (tolérant aux espaces/virgules/points/CHF)
-HOURS_RE = r"(?P<hours>\d+(?:[.,\s]\d+)?)\s*h(?:eures?)?"
-COST_RE = r"(?P<cost>\d{1,3}(?:[.'\s]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:CHF|Fr\.?|Frs?)?"
-
-# Patterns de lignes compilés
-LINE_TEMPLATES: List[re.Pattern] = []
-
-
-def _compile_line_templates():
-    """Compile les patterns regex pour chaque alias de catégorie"""
-    global LINE_TEMPLATES
-    if LINE_TEMPLATES:
-        return
-    for canon, aliases in CATEGORY_ALIASES.items():
-        for label in aliases:
-            # tolérance : "Heures AT", "AT Heures", "AT"
-            pat = rf"(?i)\b{re.escape(label)}\b.*?(?:{HOURS_RE}).*?(?:{COST_RE})"
-            LINE_TEMPLATES.append((re.compile(pat), canon))
-
-
-_compile_line_templates()
-
-
-def _normalize_text(s: str) -> str:
-    """
-    Normalisation unicode + suppression NBSP et espaces multiples
-    """
-    s = unicodedata.normalize("NFKC", s)
-    s = s.replace("\xa0", " ").replace("\u202f", " ").replace("\u2009", " ")
-    s = s.replace("'", "'")  # unifie les apostrophes
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def _to_float(num: str) -> float:
-    """
-    Convertit "5'678.00" / "5 678,00" / "5678" en float
-    """
-    if num is None:
+def _parse_number(s: str | float | int) -> float:
+    """Transforme '6 424.000' / '6.424,00' / '6424' en float robustement."""
+    if s is None or (isinstance(s, float) and pd.isna(s)):
         return 0.0
-    n = num.replace("'", "").replace(" ", "")
-    # SI virgule décimale présente -> passer en point
-    if "," in n and "." in n:
-        # heuristique : si dernier séparateur est ',', c'est la décimale
-        if n.rfind(",") > n.rfind("."):
-            n = n.replace(".", "").replace(",", ".")
-        else:
-            n = n.replace(",", "")
-    else:
-        n = n.replace(",", ".")
+    if isinstance(s, (int, float)):
+        return float(s)
+    s = str(s)
+    s = s.replace("\u00A0", " ")
+    # supprimer tout ce qui n'est pas ., , - ou chiffre
+    s = _NUM_RE.sub("", s)
+    if not s:
+        return 0.0
+    # heuristique décimale:
+    # - si virgule et point présents: on suppose format "1.234,56" -> enlever points, virgule=decimal
+    if "," in s and "." in s:
+        s = s.replace(".", "")
+        s = s.replace(",", ".")
+    # - si seulement virgule: virgule=decimal
+    elif "," in s and "." not in s:
+        s = s.replace(",", ".")
+    # sinon: déjà en "1234.56" ou "1234"
     try:
-        return float(n)
-    except Exception:
+        return float(s)
+    except ValueError:
         return 0.0
 
 
-def _categorize(line: str) -> Optional[str]:
+def _invoice_key_for(path: Path) -> str:
+    """Hash court et stable du chemin pour mapper par facture."""
+    return hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+
+
+def _date_from_filename(path: Path) -> dt.date:
     """
-    Retourne la catégorie canon à partir d'une ligne
+    Extrait la date à partir du nom de fichier '...-yyyymmddHHMMSS.pdf'.
+    On retourne le 1er jour du mois (clé mensuelle).
     """
-    for canon, aliases in CATEGORY_ALIASES.items():
-        for alias in aliases:
-            if re.search(rf"(?i)\b{re.escape(alias)}\b", line):
-                return canon
-    return None
+    m = _FN_DATE_RE.match(path.name)
+    if m:
+        yyyymmdd = m.group(1)  # '20251104'
+        year = int(yyyymmdd[0:4])
+        month = int(yyyymmdd[4:6])
+        return dt.date(year, month, 1)
+    # fallback: essayer yyyymm
+    m2 = _FN_YYYYMM_RE.match(path.name)
+    if m2:
+        yyyymm = m2.group(1)
+        year = int(yyyymm[0:4])
+        month = int(yyyymm[4:6])
+        return dt.date(year, month, 1)
+    # default: 1er du mois courant
+    today = dt.date.today()
+    return dt.date(today.year, today.month, 1)
 
 
-def _parse_line(line: str) -> Optional[Tuple[str, float, float]]:
+def _normalize_header(row: Iterable[str]) -> List[str]:
+    return [str(c or "").strip().replace("\n", " ") for c in row]
+
+
+def _find_header_and_build_df(rows: List[List[str]]) -> pd.DataFrame:
     """
-    Tente d'extraire (Catégorie canon, Heures, Coût) depuis une ligne normalisée.
-    Capte aussi la 1ʳᵉ ligne 'Heures AT' (pas de gate).
+    Trouve la vraie ligne d'en-tête (celle qui contient 'Libellé' et au moins 'Quantité', 'Prix' ou 'Montant').
+    NE SAUTE PAS la 1ère ligne de données (on coupe juste au bon endroit).
     """
-    norm = _normalize_text(line)
-    cat = _categorize(norm)
-    if not cat:
-        return None
+    header_idx = -1
+    for i, r in enumerate(rows):
+        r_norm = _normalize_header(r)
+        joined = " | ".join(r_norm).lower()
+        if "libell" in joined and ("quant" in joined or "prix" in joined or "montant" in joined):
+            header_idx = i
+            break
+    if header_idx == -1:
+        # fallback: assume 1ère ligne = en-tête
+        header_idx = 0
 
-    hours = None
-    cost = None
+    header = _normalize_header(rows[header_idx])
+    data_rows = rows[header_idx + 1 :]
+    df = pd.DataFrame(data_rows, columns=header)
 
-    # extraction des nombres (heures + coût) même si l'ordre varie
-    # 1) heures
-    m_h = re.search(HOURS_RE, norm, flags=re.I)
-    if m_h:
-        hours = _to_float(m_h.group("hours"))
-
-    # 2) coût
-    m_c = re.search(COST_RE, norm, flags=re.I)
-    if m_c:
-        cost = _to_float(m_c.group("cost"))
-
-    if hours is None and cost is None:
-        # second essai: template complet
-        for pat, template_cat in LINE_TEMPLATES:
-            m = pat.search(norm)
-            if m:
-                try:
-                    hours = _to_float(m.group("hours"))
-                    cost = _to_float(m.group("cost"))
-                    cat = template_cat  # utilise la catégorie du template
-                    break
-                except:
-                    continue
-
-    if hours is None and cost is None:
-        return None
-
-    return (cat, float(hours or 0.0), float(cost or 0.0))
-
-
-def _pdf_file_hash(pdf_path: Path) -> str:
-    """Calcule le hash SHA256 du fichier PDF pour déduplication"""
-    h = hashlib.sha256()
-    with open(pdf_path, "rb") as f:
-        while True:
-            chunk = f.read(1 << 20)  # 1MB chunks
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def extract_month_year_from_pdf_filename(filename: str) -> Optional[Tuple[int, int]]:
-    """
-    Extrait le mois et l'année du nom de fichier PDF.
-
-    IMPORTANT: La date dans le nom de fichier correspond à la date de RÉCEPTION,
-    donc il faut soustraire 1 mois pour obtenir le mois facturé.
-
-    Format attendu: F_5_XXXXXXX-YYYYMMDDHHMMSS.pdf
-    Exemple: F_5_2624308-20251104112400.pdf → 2025-11-04 (reçu) → octobre 2025 (facturé)
-
-    Args:
-        filename: Nom du fichier PDF
-
-    Returns:
-        Tuple (mois, année) ou None si le format n'est pas reconnu
-    """
-    # Pattern: F_5_XXXXXXX-YYYYMMDDHHMMSS.pdf
-    pattern = r'F_\d+_\d+-(\d{4})(\d{2})\d{2}\d{6}\.pdf'
-    match = re.match(pattern, filename)
-
-    if match:
-        year_str, month_str = match.groups()
-        year = int(year_str)
-        month = int(month_str)
-
-        if 1 <= month <= 12:
-            # Soustraire 1 mois pour obtenir le mois facturé
-            if month == 1:
-                # Janvier → Décembre de l'année précédente
-                facture_month = 12
-                facture_year = year - 1
-            else:
-                facture_month = month - 1
-                facture_year = year
-
-            return (facture_month, facture_year)
-
-    return None
-
-
-def parse_invoice_pdf(pdf_path: Path) -> pd.DataFrame:
-    """
-    Parse un PDF de facture mensuelle.
-    Retourne un DataFrame: [file, file_hash, month, year, categorie, heures, cout]
-
-    - Capture la toute 1ʳᵉ ligne ('Heures AT') grâce à l'absence de gate.
-    - Déduplique les lignes identiques au sein du PDF.
-    """
-    pdf_path = Path(pdf_path)
-
-    if not pdf_path.exists():
-        st.warning(f"⚠️ Fichier introuvable: {pdf_path}")
-        return pd.DataFrame()
-
-    file_hash = _pdf_file_hash(pdf_path)
-
-    # Trouve mois/année via le nom
-    month_year = extract_month_year_from_pdf_filename(pdf_path.name)
-    if month_year is None:
-        st.warning(f"⚠️ Impossible d'extraire la date du nom de fichier: {pdf_path.name}")
-        return pd.DataFrame()
-
-    month, year = month_year
-
-    rows: List[Tuple[str, float, float]] = []
-    seen_row_keys = set()
-
-    # 1) Essai table via pdfplumber
-    if pdfplumber is not None:
-        try:
-            with pdfplumber.open(str(pdf_path)) as pdf:
-                for page in pdf.pages:
-                    # tables d'abord
-                    tables = page.extract_tables() or []
-                    for tb in tables:
-                        for raw_row in tb:
-                            if not raw_row:
-                                continue
-                            line = " ".join([_normalize_text(str(x or "")) for x in raw_row])
-                            parsed = _parse_line(line)
-                            if parsed:
-                                key = (parsed[0], round(parsed[1], 3), round(parsed[2], 2))
-                                if key not in seen_row_keys:
-                                    rows.append(parsed)
-                                    seen_row_keys.add(key)
-
-                    # puis texte (au cas où la 1ʳᵉ ligne n'était pas tabulée)
-                    text = page.extract_text() or ""
-                    for line in text.splitlines():
-                        parsed = _parse_line(line)
-                        if parsed:
-                            key = (parsed[0], round(parsed[1], 3), round(parsed[2], 2))
-                            if key not in seen_row_keys:
-                                rows.append(parsed)
-                                seen_row_keys.add(key)
-        except Exception as e:
-            st.warning(f"⚠️ Erreur pdfplumber pour {pdf_path.name}: {e}")
-
-    # 2) Fallback PyPDF2 si rien vu
-    if not rows and PdfReader is not None:
-        try:
-            reader = PdfReader(str(pdf_path))
-            for p in reader.pages:
-                txt = p.extract_text() or ""
-                for line in txt.splitlines():
-                    parsed = _parse_line(line)
-                    if parsed:
-                        key = (parsed[0], round(parsed[1], 3), round(parsed[2], 2))
-                        if key not in seen_row_keys:
-                            rows.append(parsed)
-                            seen_row_keys.add(key)
-        except Exception as e:
-            st.warning(f"⚠️ Erreur PyPDF2 pour {pdf_path.name}: {e}")
-
-    # Construire le DataFrame
-    data = []
-    for cat, h, c in rows:
-        data.append({
-            "file": pdf_path.name,
-            "file_hash": file_hash,
-            "year": year,
-            "month": month,
-            "categorie": cat,
-            "heures": h,
-            "cout": c
-        })
-
-    df = pd.DataFrame(data)
-
-    # Consolidation (dedup stricte)
-    if not df.empty:
-        df = (df.groupby(["file_hash", "file", "year", "month", "categorie"], as_index=False)
-                .agg({"heures": "sum", "cout": "sum"}))
-
-    # Debug: afficher ce qui a été extrait
-    if not df.empty:
-        st.info(f"📄 {pdf_path.name} → {month}/{year} - {len(df)} catégories extraites")
-        for _, row in df.iterrows():
-            prix = row['cout'] / row['heures'] if row['heures'] > 0 else 0
-            st.caption(f"  • {row['categorie']}: {row['heures']:.1f}h × {prix:.2f} CHF/h = {row['cout']:.2f} CHF")
-    else:
-        st.warning(f"⚠️ Aucune catégorie extraite de {pdf_path.name}")
-        st.caption("Le PDF ne contient peut-être pas de lignes au format attendu (Catégorie + Heures + Coût)")
+    # standardiser noms de colonnes de façon tolérante
+    rename_map = {}
+    for c in df.columns:
+        cl = c.lower()
+        if "libell" in cl:
+            rename_map[c] = "Libellé"
+        elif "quant" in cl:
+            rename_map[c] = "Quantité"
+        elif "prix" in cl or "pu" in cl:
+            rename_map[c] = "Prix"
+        elif "montant" in cl or "total" in cl:
+            rename_map[c] = "Montant"
+    if rename_map:
+        df = df.rename(columns=rename_map)
 
     return df
 
 
-def load_pdf_facturation_data(factu_dir: Path, year: int) -> pd.DataFrame:
+def _extract_table_pdf(pdf_path: Path) -> pd.DataFrame:
     """
-    Lit toutes les factures PDF du dossier pour une année donnée.
-    - Évite de compter 2x le même PDF (basé sur hash).
-    - Optimisé pour une seule lecture par fichier.
-
-    Returns:
-        DataFrame avec colonnes: Date, [Heures_CATEGORY], [Cout_CATEGORY], Heures_Total, Cout_Total
+    Extrait la table principale (Libellé, Quantité, Prix, Montant) d'une facture PDF.
+    Tente d'éviter les doublons et NE PERD PAS la 1ère ligne 'Heures AT ...'.
     """
-    if not PDF_AVAILABLE and not PYPDF2_AVAILABLE:
-        return pd.DataFrame()
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        # On part sur la page 1 (facture mensuelle standard)
+        page = pdf.pages[0]
 
-    factu_dir = Path(factu_dir)
-    if not factu_dir.exists():
-        st.warning(f"⚠️ Répertoire introuvable: {factu_dir}")
-        return pd.DataFrame()
+        # Paramètres de table plus "stricts" (éviter dédoublement)
+        ts = dict(
+            vertical_strategy="lines",
+            horizontal_strategy="lines",
+            explicit_vertical_lines=[],   # si traitées correctement par pdfplumber
+            explicit_horizontal_lines=[],
+            intersection_x_tolerance=3,
+            intersection_y_tolerance=3,
+            snap_tolerance=3,
+            min_words_horizontal=1,
+            text_tolerance=3,
+            join_tolerance=3,
+        )
 
-    # Trouver tous les PDFs
-    pdfs = sorted([p for p in factu_dir.glob("F_*.pdf") if p.is_file()])
+        tables = page.extract_tables(table_settings=ts)
+        if not tables:
+            # fallback: stratégie "text" plus permissive
+            ts2 = dict(
+                vertical_strategy="text",
+                horizontal_strategy="text",
+                text_tolerance=2,
+                join_tolerance=2,
+            )
+            tables = page.extract_tables(table_settings=ts2)
 
-    if not pdfs:
-        return pd.DataFrame()
+        if not tables:
+            return pd.DataFrame()
 
-    all_parts = []
-    seen_hashes = set()
+        # On prend la table la plus large (le plus de colonnes utiles)
+        best = max(tables, key=lambda t: (len(t), len(t[0]) if t else 0))
+        df = _find_header_and_build_df(best)
 
-    for pdf_path in pdfs:
-        # Filtrer par année d'abord (évite de parser des fichiers non pertinents)
-        month_year = extract_month_year_from_pdf_filename(pdf_path.name)
-        if month_year is None:
-            continue
+        # Filtrer les colonnes utiles si elles existent
+        wanted = [c for c in ("Libellé", "Quantité", "Prix", "Montant") if c in df.columns]
+        if not wanted:
+            return pd.DataFrame()
+        df = df[wanted].copy()
 
-        pdf_month, pdf_year = month_year
-        if pdf_year != year:
-            continue
+        # Nettoyage chiffres
+        if "Quantité" in df.columns:
+            df["Quantité"] = df["Quantité"].map(_parse_number)
+        if "Prix" in df.columns:
+            df["Prix"] = df["Prix"].map(_parse_number)
+        if "Montant" in df.columns:
+            df["Montant"] = df["Montant"].map(_parse_number)
 
-        # Parser le PDF
-        df = parse_invoice_pdf(pdf_path)
-        if df.empty:
-            continue
+        # Supprimer lignes vides / sous-totaux sans quantité
+        if "Quantité" in df.columns:
+            df = df[pd.to_numeric(df["Quantité"], errors="coerce").fillna(0.0) != 0.0]
 
-        # Vérifier si déjà vu (évite doublons)
-        h = df["file_hash"].iloc[0]
-        if h in seen_hashes:
-            st.warning(f"⚠️ PDF déjà traité (doublon détecté): {pdf_path.name}")
-            continue
-        seen_hashes.add(h)
+        # De-dup au niveau ligne (certaines factures répètent le recap)
+        df = df.drop_duplicates(subset=[c for c in df.columns if c in ("Libellé","Quantité","Prix","Montant")])
 
-        all_parts.append(df)
-
-    if not all_parts:
-        return pd.DataFrame()
-
-    # Concat all
-    big = pd.concat(all_parts, ignore_index=True)
-
-    # Sécurité : re-groupby global pour éliminer tout doublon résiduel
-    big = (big.groupby(["file_hash", "file", "year", "month", "categorie"], as_index=False)
-              .agg({"heures": "sum", "cout": "sum"}))
-
-    # Transformer en format attendu par l'app:
-    # Colonnes: Date, Heures_CATEGORY, Cout_CATEGORY, Heures_Total, Cout_Total
-    result_rows = []
-
-    for (year_val, month_val), group in big.groupby(['year', 'month']):
-        date = dt.date(year_val, month_val, 1)
-        row = {'Date': date}
-
-        total_heures = 0.0
-        total_cout = 0.0
-
-        for _, cat_row in group.iterrows():
-            cat = cat_row['categorie']
-            heures = cat_row['heures']
-            cout = cat_row['cout']
-
-            row[f'Heures_{cat}'] = heures
-            row[f'Cout_{cat}'] = cout
-
-            total_heures += heures
-            total_cout += cout
-
-        row['Heures_Total'] = total_heures
-        row['Cout_Total'] = total_cout
-
-        result_rows.append(row)
-
-    if not result_rows:
-        return pd.DataFrame()
-
-    result_df = pd.DataFrame(result_rows)
-    result_df = result_df.sort_values('Date').reset_index(drop=True)
-
-    return result_df
+        return df
 
 
-# --- Fonctions de mapping (gardées pour compatibilité) ---
-
-def get_category_mapping_for_pdf(pdf_categories: List[str], app_categories: List[str]) -> Dict[str, str]:
+def _libelle_to_pdf_category(libelle: str) -> str:
     """
-    Crée un mapping initial entre les catégories PDF et les catégories de l'app.
-
-    Args:
-        pdf_categories: Liste des catégories trouvées dans le PDF
-        app_categories: Liste des catégories disponibles dans l'app (Types de personnel)
-
-    Returns:
-        Dict[str, str]: Mapping PDF category → App category
+    Transforme un libellé ligne en catégorie PDF brute (avant mapping app).
+    Exemple: 'Heures AT', 'ATF', 'CSC', 'Gestion d'accès', 'Coordinateurs', 'ATR', etc.
     """
-    mapping = {}
+    s = (libelle or "").strip().lower()
+    # règles simples et extensibles
+    if "gestion d'accès" in s or "sect. france" in s or "sect france" in s or "secteur france" in s:
+        return "Gestion d'accès"
+    if "coordinateur" in s:
+        return "Coordinateurs"
+    if re.search(r"\batr\b", s):
+        return "ATR"
+    if re.search(r"\batf\b", s):
+        return "ATF"
+    if re.search(r"\bcsc\b", s):
+        return "CSC"
+    if "heures at" in s or re.search(r"\bat\b", s):
+        return "AT"
+    # fallback: 1er mot capitalisé
+    return libelle.strip().split()[0].capitalize() if libelle else "Autre"
 
-    # Mappings prédéfinis
-    predefined_mappings = {
-        'coordinateurs': 'Coordinateur',
-        'coordinateur': 'Coordinateur',
-        "gestion d'accès": 'Sect. France',
-        "gestion d'acces": 'Sect. France',
-        'gestion acces': 'Sect. France',
-        'sect france': 'Sect. France',
-        'sect. france': 'Sect. France',
-        'section france': 'Sect. France',
-        'visitor center': 'Visitor Center',
-        'visitors center': 'Visitor Center',
-        'at': 'AT',
-        'atr': 'ATR',
-        'atf': 'ATF',
-        'csc': 'CSC',
-        'ees': 'EES'
-    }
 
-    for pdf_cat in pdf_categories:
-        pdf_cat_lower = pdf_cat.lower().strip()
+# ---------- API exposée ----------
 
-        # Chercher un mapping prédéfini
-        if pdf_cat_lower in predefined_mappings:
-            target = predefined_mappings[pdf_cat_lower]
-            if target in app_categories:
-                mapping[pdf_cat] = target
+def load_pdf_facturation_data(dir_path: Path, year: int) -> pd.DataFrame:
+    """
+    Parcourt les PDF d'un dossier, agrège par facture/mois, et retourne un DF avec:
+      Date, InvoiceFile, InvoiceKey,
+      Heures_<Cat>, Coût_<Cat>, Heures_Total, Cout_Total
+    """
+    rows = []
+    for pdf_file in Path(dir_path).glob("*.pdf"):
+        try:
+            date_m = _date_from_filename(pdf_file)
+            if date_m.year != year:
                 continue
 
-        # Chercher une correspondance exacte (insensible à la casse)
-        exact_match = None
-        for app_cat in app_categories:
-            if pdf_cat.lower() == app_cat.lower():
-                exact_match = app_cat
-                break
+            df_lines = _extract_table_pdf(pdf_file)
+            if df_lines.empty:
+                continue
 
-        if exact_match:
-            mapping[pdf_cat] = exact_match
-        else:
-            # Pas de mapping automatique - nécessitera une intervention manuelle
-            mapping[pdf_cat] = None
+            invoice_key = _invoice_key_for(pdf_file)
 
+            # agrégation par catégorie brute PDF
+            df_lines["__pdf_cat__"] = df_lines["Libellé"].map(_libelle_to_pdf_category)
+            grp = df_lines.groupby("__pdf_cat__", as_index=False).agg(
+                Quantite=("Quantité", "sum"),
+                Montant=("Montant", "sum")
+            )
+
+            row = {
+                "Date": pd.Timestamp(date_m),
+                "InvoiceFile": pdf_file.name,
+                "InvoiceKey": invoice_key,
+            }
+
+            heures_total, cout_total = 0.0, 0.0
+            for _, r in grp.iterrows():
+                cat = str(r["__pdf_cat__"])
+                qte = float(r["Quantite"] or 0.0)
+                mnt = float(r["Montant"] or 0.0)
+                row[f"Heures_{cat}"] = qte
+                row[f"Coût_{cat}"] = mnt
+                heures_total += qte
+                cout_total += mnt
+
+            row["Heures_Total"] = heures_total
+            row["Cout_Total"] = cout_total
+
+            rows.append(row)
+
+        except Exception:
+            # on ignore ce PDF; la page d'analyse affichera un warning en amont si besoin
+            continue
+
+    if not rows:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(rows).fillna(0.0)
+    # harmoniser types
+    if "Date" in out.columns:
+        out["Date"] = pd.to_datetime(out["Date"])
+    for c in out.columns:
+        if c.startswith("Heures_") or c.startswith("Coût_") or c in ("Heures_Total","Cout_Total"):
+            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
+    # de-dup au niveau facture
+    out = out.drop_duplicates(subset=["InvoiceKey","Date"], keep="first")
+    return out
+
+
+def get_category_mapping_for_pdf(pdf_categories: List[str], app_categories: List[str]) -> Dict[str, Optional[str]]:
+    """
+    Propose un mapping "auto" tolérant: match exact, casefold, variations simples.
+    Les catégories non trouvées restent None (l'UI pourra demander à mapper).
+    """
+    mapping = {}
+    acase = {a.lower(): a for a in app_categories or []}
+
+    def norm(x: str) -> str:
+        return (x or "").lower().replace("é", "e").replace("è", "e").replace("ê","e").replace("à","a").replace("’","'")
+
+    for pdf_cat in pdf_categories:
+        n = norm(pdf_cat)
+        # correspondances directes
+        if n in acase:
+            mapping[pdf_cat] = acase[n]
+            continue
+        # heuristiques usuelles
+        if n in ("gestion d'acces", "sect. france", "sect france", "secteur france"):
+            mapping[pdf_cat] = acase.get("gestion d'accès", acase.get("sect. france", None))
+            continue
+        if n == "coordinateurs":
+            mapping[pdf_cat] = acase.get("coordinateurs", None)
+            continue
+        mapping[pdf_cat] = None  # à mapper dans l'UI
     return mapping
 
 
-def apply_category_mapping(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
+def apply_category_mapping(pdf_df: pd.DataFrame, mapping: Dict[str, Optional[str]]) -> pd.DataFrame:
     """
-    Applique le mapping des catégories au DataFrame de facturation PDF.
-
-    Args:
-        df: DataFrame avec colonnes Heures_CATEGORY, Cout_CATEGORY
-        mapping: Dict[pdf_category → app_category]
-
-    Returns:
-        DataFrame avec les catégories renommées selon le mapping
+    Renomme les colonnes Heures_/Coût_ de la catégorie PDF vers la catégorie App ciblée.
+    Exemple: Heures_ATF -> Heures_AT (si l'utilisateur a mappé ATF -> AT ce mois-ci).
     """
-    df_mapped = df.copy()
+    if pdf_df is None or pdf_df.empty:
+        return pdf_df
 
-    for pdf_cat, app_cat in mapping.items():
-        if app_cat is None:
-            continue
+    df = pdf_df.copy()
+    rename_cols = {}
 
-        # Renommer les colonnes
-        old_heures_col = f'Heures_{pdf_cat}'
-        old_cout_col = f'Cout_{pdf_cat}'
-        new_heures_col = f'Heures_{app_cat}'
-        new_cout_col = f'Cout_{app_cat}'
+    # construire table de correspondances (source -> cible)
+    for col in list(df.columns):
+        if col.startswith("Heures_") or col.startswith("Coût_"):
+            prefix, cat = col.split("_", 1)
+            tgt = mapping.get(cat)  # peut être None
+            if tgt and tgt != cat:
+                # fusionner sous le nouveau nom
+                new_col = f"{prefix}_{tgt}"
+                if new_col not in df.columns:
+                    df[new_col] = 0.0
+                df[new_col] = pd.to_numeric(df[new_col], errors="coerce").fillna(0.0) + pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+                # marquer l'ancienne pour suppression
+                rename_cols[col] = None
 
-        if old_heures_col in df_mapped.columns:
-            # Si la nouvelle colonne existe déjà, additionner
-            if new_heures_col in df_mapped.columns:
-                df_mapped[new_heures_col] += df_mapped[old_heures_col]
-                df_mapped[new_cout_col] += df_mapped[old_cout_col]
-                df_mapped = df_mapped.drop(columns=[old_heures_col, old_cout_col])
-            else:
-                df_mapped = df_mapped.rename(columns={
-                    old_heures_col: new_heures_col,
-                    old_cout_col: new_cout_col
-                })
+    # supprimer anciennes colonnes déplacées
+    if rename_cols:
+        df = df.drop(columns=[c for c, v in rename_cols.items() if v is None], errors="ignore")
 
-    return df_mapped
+    # recalc des totaux
+    heure_cols = [c for c in df.columns if c.startswith("Heures_") and c != "Heures_Total"]
+    cout_cols  = [c for c in df.columns if c.startswith("Coût_") and c != "Cout_Total"]
+
+    if heure_cols:
+        df["Heures_Total"] = df[heure_cols].sum(axis=1, numeric_only=True)
+    if cout_cols:
+        df["Cout_Total"] = df[cout_cols].sum(axis=1, numeric_only=True)
+
+    return df
