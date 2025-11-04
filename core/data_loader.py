@@ -9,10 +9,6 @@ import numpy as np
 import streamlit as st
 
 
-# ============================================================
-# === CHARGEMENT PAX (CODE D'ORIGINE)
-# ============================================================
-
 @st.cache_data
 def load_pax_data(file_path: Path, file_description: str):
     """
@@ -117,10 +113,6 @@ def load_pax_data(file_path: Path, file_description: str):
         st.error(traceback.format_exc())
         return pd.DataFrame(), None, None
 
-
-# ============================================================
-# === FACTURATION – ANCIEN FORMAT (DATE OUVRABLE / HEURES) – CODE D'ORIGINE
-# ============================================================
 
 @st.cache_data
 def load_facturation_at_month(year: int, month: int, factu_dir: Path) -> pd.DataFrame:
@@ -260,149 +252,3 @@ def estimate_at_hours_from_pax_variation(
         "facteur": facteur,
         "heures_estimees": heures_estimees
     }
-
-
-# ============================================================
-# === NOUVEAU FORMAT FACTURATION (LIBELLÉ / QUANTITÉ / PRIX / MONTANT)
-# ============================================================
-
-# Helper de parsing numérique robuste (espaces de milliers, virgule décimale, CHF, etc.)
-_NUM_RE_F = re.compile(r"[^\d,.\-\s]+")
-
-def _to_float_any(s: object) -> float | None:
-    """
-    Convertit proprement '204 701,32 CHF' -> 204701.32 ; gère espaces insécables.
-    """
-    if s is None:
-        return None
-    t = str(s).strip().replace("\u00A0", " ")  # supprime espaces insécables
-    if not t:
-        return None
-    t = _NUM_RE_F.sub("", t)      # enlève tout sauf chiffres/signes/.,/
-    t = t.replace(" ", "")        # supprime espaces de milliers
-    if "," in t and "." not in t: # virgule décimale FR -> point
-        t = t.replace(",", ".")
-    try:
-        return float(t)
-    except Exception:
-        return None
-
-
-@st.cache_data
-def load_facturation_by_type_month(year: int, month: int, factu_dir: Path) -> pd.DataFrame:
-    """
-    Tente de lire 'Facturation Lot A mm.yyyy.xlsx' au format agrégé :
-      - Libellé (Type: AT, ATF, ATR, ...)
-      - Quantité (heures totales)
-      - Prix     (coût horaire)
-      - Montant  (Quantité * Prix)
-
-    Retourne un DF normalisé: ['Type','Quantité','Prix','Montant','Ecart_Calcule'].
-    Retourne DataFrame() si le fichier n'existe pas ou si le schéma n'est pas trouvé.
-    """
-    file_path = factu_dir / f"Facturation Lot A {month:02d}.{year}.xlsx"
-    if not file_path.exists():
-        return pd.DataFrame()
-
-    for header_row in range(0, 7):
-        try:
-            sample = pd.read_excel(file_path, engine="openpyxl", header=header_row, nrows=12)
-        except Exception:
-            continue
-
-        cols_map = {c: str(c).strip().lower() for c in sample.columns}
-        sample = sample.rename(columns=cols_map)
-
-        lib_col  = next((c for c in sample.columns if c in {"libellé","libelle","type"}), None)
-        qte_col  = next((c for c in sample.columns if c in {"quantité","quantite","heures","nb heures"}), None)
-        prix_col = next((c for c in sample.columns if c in {"prix","coût horaire","cout horaire","tarif"}), None)
-        mnt_col  = next((c for c in sample.columns if c in {"montant","total","ttc","ht"}), None)
-
-        if all([lib_col, qte_col, prix_col, mnt_col]):
-            try:
-                df0 = pd.read_excel(file_path, engine="openpyxl", header=header_row)
-            except Exception:
-                return pd.DataFrame()
-
-            df0 = df0.rename(columns={c: str(c).strip().lower() for c in df0.columns})
-            df = df0[[lib_col, qte_col, prix_col, mnt_col]].copy()
-            df.columns = ["Type", "Quantité", "Prix", "Montant"]
-
-            df["Quantité"] = df["Quantité"].map(_to_float_any)
-            df["Prix"]     = df["Prix"].map(_to_float_any)
-            df["Montant"]  = df["Montant"].map(_to_float_any)
-
-            df = df.dropna(subset=["Type","Quantité","Prix","Montant"])
-            df["Type"] = df["Type"].astype(str).str.strip().str.upper()
-
-            # Agrège par type (au cas où plusieurs lignes)
-            df = df.groupby("Type", as_index=False).agg({
-                "Quantité": "sum",
-                "Montant": "sum",
-                "Prix": "median"  # si plusieurs tarifs, médiane
-            })
-            df["Ecart_Calcule"] = (df["Quantité"] * df["Prix"] - df["Montant"]).round(2)
-            return df
-
-    # Schéma non trouvé
-    return pd.DataFrame()
-
-
-def load_facturation_month_flexible(year: int, month: int, factu_dir: Path) -> tuple[pd.DataFrame, str]:
-    """
-    Tente d'abord le 'nouveau format' (Libellé / Quantité / Prix / Montant).
-    Si non trouvé, retombe sur l'ancien 'Date ouvrable / Heures'.
-
-    Retourne (df, fmt) où fmt ∈ {"new","old","none"}.
-      - fmt == "new"  -> df colonnes ['Type','Quantité','Prix','Montant','Ecart_Calcule']
-      - fmt == "old"  -> df colonnes originales ['Date ouvrable','Heures', ...]
-      - fmt == "none" -> df vide
-    """
-    df_new = load_facturation_by_type_month(year, month, factu_dir)
-    if not df_new.empty:
-        return df_new, "new"
-
-    df_old = load_facturation_at_month(year, month, factu_dir)
-    if not df_old.empty:
-        return df_old, "old"
-
-    return pd.DataFrame(), "none"
-
-
-def get_month_factu_total_amount(year: int, month: int, factu_dir: Path) -> float | None:
-    """
-    Si le fichier est au NOUVEAU format : retourne la somme des 'Montant'.
-    Si ancien format ou fichier absent : retourne None.
-    """
-    df, fmt = load_facturation_month_flexible(year, month, factu_dir)
-    if fmt == "new" and not df.empty and "Montant" in df.columns:
-        total = float(pd.to_numeric(df["Montant"], errors="coerce").fillna(0).sum())
-        return round(total, 2)
-    return None
-
-
-# ============================================================
-# === UTILITAIRES ANALYSE BUDGÉTAIRE (VUES MENSUELLES / ANNUELLES)
-# ============================================================
-
-def build_yearly_factu_summary(year: int, factu_dir: Path) -> pd.DataFrame:
-    """
-    Construit un tableau annuel avec 1 ligne par mois :
-    Colonnes : ['Mois','Format','Total_Montant_CHF']
-      - Format ∈ {"new","old","none"}
-      - Total_Montant_CHF = somme des 'Montant' si Format == "new", sinon None
-    """
-    rows = []
-    for m in range(1, 13):
-        df_m, fmt_m = load_facturation_month_flexible(year, m, factu_dir)
-        if fmt_m == "new":
-            total_m = get_month_factu_total_amount(year, m, factu_dir) or 0.0
-        else:
-            total_m = None
-        rows.append({
-            "Mois": f"{m:02d}",
-            "Format": fmt_m,
-            "Total_Montant_CHF": total_m
-        })
-    out = pd.DataFrame(rows)
-    return out
