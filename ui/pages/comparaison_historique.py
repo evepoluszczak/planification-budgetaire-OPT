@@ -223,7 +223,7 @@ def render_comparaison_historique_page():
                         direction='horizontal',   # En ligne
                         titleAnchor='middle',
                         anchor='middle',
-                        titleAlign='center,
+                        titleAlign='center',
                         labelFontSize=11,
                         symbolSize=120
                     )
