@@ -49,8 +49,14 @@ def load_facturation_data_for_year(year: int):
     if excel_data.empty and pdf_data.empty:
         return pd.DataFrame()
     elif excel_data.empty:
+        # Normaliser la colonne Date en datetime
+        if 'Date' in pdf_data.columns:
+            pdf_data['Date'] = pd.to_datetime(pdf_data['Date'])
         return pdf_data
     elif pdf_data.empty:
+        # Normaliser la colonne Date en datetime (devrait déjà l'être, mais par sécurité)
+        if 'Date' in excel_data.columns:
+            excel_data['Date'] = pd.to_datetime(excel_data['Date'])
         return excel_data
     else:
         # Fusionner les deux sources
@@ -68,6 +74,11 @@ def load_facturation_data_for_year(year: int):
 
         # Concaténer
         result = pd.concat([excel_harmonized, pdf_data], ignore_index=True)
+
+        # Normaliser la colonne Date en datetime avant le tri
+        # (Les Excel ont datetime, les PDF ont date objects)
+        result['Date'] = pd.to_datetime(result['Date'])
+
         result = result.sort_values('Date').reset_index(drop=True)
 
         # Remplir les NaN avec 0
