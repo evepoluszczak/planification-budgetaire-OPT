@@ -9,69 +9,123 @@ import streamlit as st
 import altair as alt
 from config.constants import FACTU_AT_DIR, FACTU_AT_GLOB, TIME_SLOTS
 from core.planning import _ensure_grid, _apply_ops_to_grid
+from utils.pdf_parser import (
+    load_pdf_facturation_data,
+    get_category_mapping_for_pdf,
+    apply_category_mapping,
+    PDF_AVAILABLE
+)
 
 
 def load_facturation_data_for_year(year: int):
     """
     Charge et agrège tous les fichiers de facturation pour une année donnée.
-    
+    Supporte à la fois les fichiers Excel (.xlsx) et PDF (.pdf).
+
     Returns:
-        DataFrame avec colonnes: Date, Heures, Coordinateurs
+        DataFrame avec colonnes: Date, Heures_[CATEGORY], Cout_[CATEGORY], Heures_Total, Cout_Total
     """
     factu_dir = Path(FACTU_AT_DIR)
     if not factu_dir.exists():
         st.error(f"Le répertoire de facturation n'existe pas: {factu_dir}")
         return pd.DataFrame()
-    
-    # Pattern pour les fichiers de facturation avec année
+
+    # ==== CHARGER LES FICHIERS EXCEL ====
+    excel_data = _load_excel_facturation(year, factu_dir)
+
+    # ==== CHARGER LES FICHIERS PDF ====
+    pdf_data = pd.DataFrame()
+    if PDF_AVAILABLE:
+        try:
+            pdf_data = load_pdf_facturation_data(factu_dir, year)
+
+            # Appliquer le mapping des catégories si nécessaire
+            if not pdf_data.empty:
+                pdf_data = _apply_pdf_category_mapping(pdf_data)
+        except Exception as e:
+            st.warning(f"Erreur lors du chargement des PDFs: {e}")
+
+    # ==== FUSIONNER EXCEL ET PDF ====
+    if excel_data.empty and pdf_data.empty:
+        return pd.DataFrame()
+    elif excel_data.empty:
+        return pdf_data
+    elif pdf_data.empty:
+        return excel_data
+    else:
+        # Fusionner les deux sources
+        # Les Excel ont: Date, Heures, Heures_Coordinateurs, Heures_Total
+        # Les PDF ont: Date, Heures_CATEGORY, Cout_CATEGORY, Heures_Total, Cout_Total
+
+        # Harmoniser les colonnes Excel pour être compatibles avec PDF
+        excel_harmonized = excel_data.copy()
+        if 'Heures' in excel_harmonized.columns:
+            excel_harmonized.rename(columns={'Heures': 'Heures_AT'}, inplace=True)
+        if 'Heures_Coordinateurs' in excel_harmonized.columns:
+            excel_harmonized.rename(columns={
+                'Heures_Coordinateurs': 'Heures_Coordinateur'
+            }, inplace=True)
+
+        # Concaténer
+        result = pd.concat([excel_harmonized, pdf_data], ignore_index=True)
+        result = result.sort_values('Date').reset_index(drop=True)
+
+        # Remplir les NaN avec 0
+        result = result.fillna(0)
+
+        return result
+
+
+def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
+    """Charge les fichiers Excel de facturation pour une année donnée"""
     pattern = re.compile(r'Facturation Lot A (\d{2})\.(\d{4})\.xlsx')
-    
+
     all_data = []
-    
+
     for file_path in factu_dir.glob(FACTU_AT_GLOB):
         match = pattern.match(file_path.name)
         if match:
             month_str, year_str = match.groups()
             file_year = int(year_str)
-            
+
             # Ne charger que les fichiers de l'année sélectionnée
             if file_year != year:
                 continue
-            
+
             try:
                 # Lire le fichier Excel sans header pour analyser la structure
                 df_raw = pd.read_excel(file_path, header=None)
-                
+
                 # Trouver la ligne d'en-tête (qui contient "Date ouvrable", "Heures", etc.)
                 header_row = None
                 for idx, row in df_raw.iterrows():
                     if 'Date ouvrable' in str(row.values):
                         header_row = idx
                         break
-                
+
                 if header_row is None:
                     st.warning(f"Structure non reconnue dans {file_path.name}")
                     continue
-                
+
                 # Lire à partir de la ligne suivante avec les bonnes colonnes
                 df = pd.read_excel(file_path, header=header_row)
-                
+
                 # Vérifier les colonnes nécessaires
                 if 'Date ouvrable' not in df.columns or 'Heures' not in df.columns:
                     st.warning(f"Colonnes manquantes dans {file_path.name}")
                     continue
-                
+
                 # Filtrer les lignes valides (qui contiennent "Total")
                 df = df[df['Date ouvrable'].astype(str).str.contains('Total', na=False)].copy()
-                
+
                 # Extraire la date du format "Total DD.MM.YYYY"
                 df['Date_str'] = df['Date ouvrable'].astype(str).str.extract(r'(\d{2}\.\d{2}\.\d{4})')
                 df['Date'] = pd.to_datetime(df['Date_str'], format='%d.%m.%Y', errors='coerce')
-                
+
                 # Nettoyer les données
                 df = df.dropna(subset=['Date'])
                 df['Heures'] = pd.to_numeric(df['Heures'], errors='coerce').fillna(0)
-                
+
                 # Ajouter les heures de coordination si disponible
                 if 'Coordinateurs' in df.columns:
                     df['Heures_Coordinateurs'] = pd.to_numeric(
@@ -79,25 +133,48 @@ def load_facturation_data_for_year(year: int):
                     ).fillna(0)
                 else:
                     df['Heures_Coordinateurs'] = 0
-                
+
                 # Calculer le total des heures (AT + Coordinateurs)
                 df['Heures_Total'] = df['Heures'] + df['Heures_Coordinateurs']
-                
+
                 # Sélectionner les colonnes finales
                 df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
                 all_data.append(df_clean)
-                
+
             except Exception as e:
                 st.warning(f"Erreur lors du chargement de {file_path.name}: {e}")
                 continue
-    
+
     if not all_data:
         return pd.DataFrame()
-    
+
     # Concaténer tous les mois
     result = pd.concat(all_data, ignore_index=True)
     result = result.sort_values('Date').reset_index(drop=True)
-    
+
+    return result
+
+
+def _apply_pdf_category_mapping(pdf_df: pd.DataFrame) -> pd.DataFrame:
+    """Applique le mapping des catégories PDF vers les catégories de l'app"""
+    # Récupérer le mapping depuis session_state
+    mapping = st.session_state.get('pdf_category_mapping', {})
+
+    if not mapping:
+        # Créer un mapping automatique si ce n'est pas fait
+        pdf_categories = []
+        for col in pdf_df.columns:
+            if col.startswith('Heures_') and col != 'Heures_Total':
+                cat = col.replace('Heures_', '')
+                pdf_categories.append(cat)
+
+        app_categories = list(st.session_state.get('perimetres', {}).keys())
+        mapping = get_category_mapping_for_pdf(pdf_categories, app_categories)
+        st.session_state.pdf_category_mapping = mapping
+
+    # Appliquer le mapping
+    result = apply_category_mapping(pdf_df, mapping)
+
     return result
 
 
