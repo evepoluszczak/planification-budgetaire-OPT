@@ -24,29 +24,37 @@ F_5_XXXXXXX-YYYYMMDDHHMMSS.pdf
 
 ### Contenu du PDF
 
-Le PDF doit contenir des lignes de facturation par catégorie. Deux formats sont supportés:
+Le PDF doit contenir des lignes de facturation structurées avec le format:
 
-**Format 1 (avec mots-clés):**
 ```
-Heures AT : Quantité: 6 424.000 Prix: 45.50 Montant: 292 292.00
-Heures ATR: Quantité: 1 054.000 Prix: 54.00 Montant: 56 916.00
-Heures Coordinateurs: Quantité: 472.500 Prix: 55.00 Montant: 25 987.50
+PRIX   QUANTITÉ   LIBELLÉ   MONTANT
 ```
 
-**Format 2 (sans mots-clés):**
+**Exemple concret d'une facture OPT:**
 ```
-Heures AT: 6424.000 45.50 292292.00
-Heures Coordinateurs: 472.500 55.00 25987.50
-Heures CSC: 1585.000 45.50 72117.50
-Gestion d'accès: 1270.250 53.15 67513.79
-Visitor Center: 217.000 45.50 9873.50
+45.50   6424.000   Heures AT                      292 292.00
+54.00   1054.000   Heures ATR                      56 916.00
+55.00    472.500   Heures Coordinateurs            25 987.50
+52.00    129.000   Heures ATF                       6 708.00
+45.50   1585.000   Heures CSC                      72 117.50
+53.15   1270.250   Heures Gestion d'accès          67 513.79
+45.50    217.000   Heures Visitor Center            9 873.50
 ```
 
-**Notes:**
-- L'application extrait automatiquement la **Quantité** (heures) et le **Montant** (coût)
-- Le prix unitaire est ignoré (il est recalculé si nécessaire)
-- Les espaces dans les grands nombres sont gérés automatiquement (ex: "6 424.000" → 6424.000)
-- Les catégories peuvent commencer par "Heures" ou directement par le nom de la catégorie
+**Détection automatique (Regex robuste):**
+- Pattern: `Prix + Quantité + Libellé + Montant`
+- Gestion des **espaces insécables** et **espaces de milliers** (ex: "292 292.00" → 292292.00)
+- Support **virgule ou point** comme séparateur décimal (67 513,79 ou 67513.79)
+- Filtrage automatique pour ne garder que les lignes contenant "Heures"
+- Agrégation si une catégorie apparaît plusieurs fois dans le PDF
+
+**Catégories détectées automatiquement:**
+- AT, ATR, ATF (ordre de détection important pour éviter les faux positifs)
+- Coordinateurs
+- CSC
+- Gestion d'accès → **mappé automatiquement vers "Sect. France"**
+- Visitor Center
+- EES
 
 ## 🔧 Installation
 

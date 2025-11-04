@@ -58,15 +58,58 @@ def extract_month_year_from_pdf_filename(filename: str) -> Optional[Tuple[int, i
     return None
 
 
+def _normalize_number(s: str) -> float:
+    """
+    Convertit '292 292.00' ou '67 513,79' -> float, robuste aux espaces/virgule.
+    """
+    s = s.replace("\u00A0", " ").strip()
+    # Si virgule est le séparateur décimal (fr), remplace par point
+    if s.count(",") == 1 and s.rfind(",") > s.rfind("."):
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        s = s.replace(" ", "")
+    try:
+        return float(s)
+    except Exception:
+        # ultime fallback
+        s2 = re.sub(r"[^\d\.\-]", "", s)
+        return float(s2) if s2 else 0.0
+
+
+def _infer_category_from_label(label: str) -> str:
+    """
+    Mappe le libellé 'Heures XXX' vers une catégorie courte.
+    L'ordre est important: ATF/ATR avant AT pour éviter les faux positifs.
+    """
+    base = label.lower()
+
+    if "atf" in base:
+        return "ATF"
+    if "atr" in base:
+        return "ATR"
+    if "coordinateur" in base:
+        return "Coordinateurs"
+    if "csc" in base:
+        return "CSC"
+    if "gestion d'accès" in base or "gestion d'acces" in base or "gestion d acces" in base:
+        return "Gestion d'accès"
+    if "visitor" in base:
+        return "Visitor Center"
+    # 'AT' doit venir après ATF/ATR pour ne pas les absorber
+    if re.search(r"\bat\b", base):
+        return "AT"
+
+    # fallback: garder le dernier mot significatif après 'Heures'
+    after = re.sub(r"^Heures?\s*", "", label, flags=re.IGNORECASE).strip()
+    return after or label
+
+
 def parse_invoice_pdf(pdf_path: Path) -> Dict:
     """
-    Parse un PDF de facture et extrait les données.
+    Parse un PDF de facture et extrait les données avec un pattern robuste.
 
-    Structure attendue dans le PDF (2 formats possibles):
-    Format 1 (avec mots-clés):
-        Heures AT : Quantité: 6 424.000 Prix: 45.50 Montant: 292 292.00
-    Format 2 (sans mots-clés):
-        Heures Coordinateurs: 472.500 55.00 25 987.50
+    Cherche des lignes structurées du type:
+        PRIX(45.50)   QUANTITÉ(6424.000)   LIBELLÉ(Heures AT)   MONTANT(292 292.00)
 
     Args:
         pdf_path: Chemin vers le fichier PDF
@@ -77,8 +120,8 @@ def parse_invoice_pdf(pdf_path: Path) -> Dict:
         - 'year': int (année)
         - 'categories': Dict[str, Dict[str, float]]
             Exemple: {
-                'AT': {'heures': 1234.5, 'cout': 56789.0},
-                'Coordinateurs': {'heures': 234.5, 'cout': 12345.0}
+                'AT': {'heures': 1234.5, 'cout': 56789.0, 'prix': 45.50},
+                'Coordinateurs': {'heures': 234.5, 'cout': 12345.0, 'prix': 55.00}
             }
         - 'total_heures': float
         - 'total_cout': float
@@ -102,130 +145,62 @@ def parse_invoice_pdf(pdf_path: Path) -> Dict:
             for page in pdf.pages:
                 all_text += page.extract_text() or ""
 
-            # Parser les catégories et leurs valeurs
+            # Pattern regex robuste pour capturer:
+            # Prix   Quantité   Libellé(Heures XXX)   Montant
+            # Nombre tolérant (espaces insécables, virgule ou point)
+            NUM = r"(?:\d{1,3}(?:[ \u00A0]\d{3})*|\d+)(?:[.,]\d+)?"
+            LABEL = r"([A-Za-zÀ-ÖØ-öø-ÿ''().\-\/ ]+?)"
+
+            ROW_PATTERN = re.compile(
+                rf"(?P<price>{NUM})\s+(?P<qty>{NUM})\s+(?P<label>{LABEL})\s+(?P<amount>{NUM})",
+                re.MULTILINE
+            )
+
             categories = {}
             total_heures = 0.0
             total_cout = 0.0
 
-            lines = all_text.split('\n')
+            # Extraire toutes les lignes correspondant au pattern
+            for match in ROW_PATTERN.finditer(all_text):
+                price = _normalize_number(match.group("price"))
+                qty = _normalize_number(match.group("qty"))
+                amount = _normalize_number(match.group("amount"))
+                label = match.group("label").strip()
 
-            # Patterns de parsing
-            # Format 1: Heures <CATEGORY> : Quantité: 6 424.000 Prix: 45.50 Montant: 292 292.00
-            # Format 2: Heures <CATEGORY>: 472.500 55.00 25 987.50
-            # Format 3: <CATEGORY>: 217.000 45.50 9 873.50 (sans "Heures")
+                # Nettoyer les espaces multiples
+                label = re.sub(r"\s{2,}", " ", label)
 
-            for line in lines:
-                line = line.strip()
-                if not line:
+                # Filtrer: ne garder que les lignes "Heures XXX"
+                if not re.search(r"\bHeures?\b", label, re.IGNORECASE):
                     continue
 
-                # Format 1: avec mots-clés "Quantité" et "Montant"
-                if 'quantité' in line.lower() or 'quantite' in line.lower():
-                    # Extraire le nom de catégorie (après "Heures" et avant "Quantité")
-                    category_match = re.match(r'.*?heures\s+([^:]+?)[\s:]+(?:quantit[ée]|quantit[ée])', line, re.IGNORECASE)
-                    if category_match:
-                        categorie = category_match.group(1).strip()
-                    else:
-                        continue
+                # Inférer la catégorie depuis le libellé
+                categorie = _infer_category_from_label(label)
 
-                    # Extraire Quantité (heures)
-                    quant_match = re.search(r'quantit[ée]\s*:\s*([\d\s]+\.\d+)', line, re.IGNORECASE)
-                    if quant_match:
-                        heures_str = quant_match.group(1).replace(' ', '')
-                        heures = float(heures_str)
-                    else:
-                        continue
-
-                    # Extraire Montant (coût)
-                    montant_match = re.search(r'montant\s*:\s*([\d\s]+\.\d+)', line, re.IGNORECASE)
-                    if montant_match:
-                        cout_str = montant_match.group(1).replace(' ', '')
-                        cout = float(cout_str)
-                    else:
-                        continue
-
+                # Agréger si la catégorie existe déjà (facture avec lignes répétées)
+                if categorie in categories:
+                    categories[categorie]['heures'] += qty
+                    categories[categorie]['cout'] += amount
+                else:
                     categories[categorie] = {
-                        'heures': heures,
-                        'cout': cout
+                        'heures': qty,
+                        'cout': amount,
+                        'prix': price
                     }
 
-                # Format 2 & 3: sans mots-clés, juste 3 nombres (heures, prix unitaire, montant)
-                elif ':' in line and any(keyword in line.lower() for keyword in ['heures', 'at', 'atr', 'atf', 'csc', 'coordinateur', 'gestion', 'visitor']):
-                    # Extraire le nom de catégorie (avant le ":")
-                    parts = line.split(':')
-                    if len(parts) < 2:
-                        continue
-
-                    categorie_part = parts[0].strip()
-                    # Enlever "Heures" du début si présent
-                    if categorie_part.lower().startswith('heures'):
-                        categorie = categorie_part[6:].strip()
-                    else:
-                        categorie = categorie_part
-
-                    # La partie après ":" contient les nombres
-                    numbers_part = ':'.join(parts[1:])
-
-                    # Extraire tous les nombres (en gérant les espaces dans les milliers)
-                    # Pattern: cherche des nombres avec espaces optionnels (ex: "6 424.000" ou "292 292.00")
-                    number_pattern = r'([\d\s]+\.\d+)'
-                    numbers = re.findall(number_pattern, numbers_part)
-
-                    if len(numbers) >= 3:
-                        # Format: Quantité Prix Montant
-                        # On prend le premier (heures) et le dernier (montant)
-                        heures_str = numbers[0].replace(' ', '')
-                        cout_str = numbers[-1].replace(' ', '')
-                        heures = float(heures_str)
-                        cout = float(cout_str)
-
-                        categories[categorie] = {
-                            'heures': heures,
-                            'cout': cout
-                        }
-                    elif len(numbers) == 2:
-                        # Juste 2 nombres: heures et montant
-                        heures_str = numbers[0].replace(' ', '')
-                        cout_str = numbers[1].replace(' ', '')
-                        heures = float(heures_str)
-                        cout = float(cout_str)
-
-                        categories[categorie] = {
-                            'heures': heures,
-                            'cout': cout
-                        }
-
-            # Chercher les totaux globaux
-            for line in lines:
-                if 'total' in line.lower() and 'sous' not in line.lower():
-                    # Chercher le dernier montant dans la ligne
-                    number_pattern = r'([\d\s]+\.\d+)'
-                    numbers = re.findall(number_pattern, line)
-
-                    if len(numbers) >= 2:
-                        # Prendre les 2 derniers: heures et coût
-                        heures_str = numbers[-2].replace(' ', '')
-                        cout_str = numbers[-1].replace(' ', '')
-                        try:
-                            total_heures = float(heures_str)
-                            total_cout = float(cout_str)
-                            break
-                        except ValueError:
-                            continue
-
-            # Si on n'a pas trouvé de total, le calculer à partir des catégories
-            if total_heures == 0 and categories:
+            # Calculer les totaux
+            if categories:
                 total_heures = sum(cat['heures'] for cat in categories.values())
-            if total_cout == 0 and categories:
                 total_cout = sum(cat['cout'] for cat in categories.values())
 
             # Debug: afficher ce qui a été extrait
             if categories:
                 st.info(f"📄 {pdf_path.name} → {month}/{year} - {len(categories)} catégories extraites")
                 for cat, vals in categories.items():
-                    st.caption(f"  • {cat}: {vals['heures']:.1f}h → {vals['cout']:.2f} CHF")
+                    st.caption(f"  • {cat}: {vals['heures']:.1f}h × {vals['prix']:.2f} CHF/h = {vals['cout']:.2f} CHF")
             else:
                 st.warning(f"⚠️ Aucune catégorie extraite de {pdf_path.name}")
+                st.caption("Le PDF ne contient peut-être pas de lignes au format: Prix Quantité Libellé Montant")
 
             return {
                 'month': month,
