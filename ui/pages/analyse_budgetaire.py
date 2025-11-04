@@ -77,11 +77,16 @@ def load_facturation_data_for_year(year: int):
 
         # Normaliser la colonne Date en datetime avant le tri
         # (Les Excel ont datetime, les PDF ont date objects)
-        result['Date'] = pd.to_datetime(result['Date'])
+        # errors='coerce' convertit les valeurs invalides en NaT
+        result['Date'] = pd.to_datetime(result['Date'], errors='coerce')
 
-        result = result.sort_values('Date').reset_index(drop=True)
+        # Supprimer les lignes avec Date invalide/NaN avant le tri
+        result = result.dropna(subset=['Date'])
 
-        # Remplir les NaN avec 0
+        # Trier avec gestion explicite des NaN (au cas où)
+        result = result.sort_values('Date', na_position='last').reset_index(drop=True)
+
+        # Remplir les NaN avec 0 (pour les colonnes numériques)
         result = result.fillna(0)
 
         return result
