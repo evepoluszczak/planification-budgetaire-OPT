@@ -183,15 +183,31 @@ def render_comparaison_historique_page():
         )
 
         # Graphique Altair comparatif
+        # --- Couleurs ---
+        gray_scale = alt.Scale(
+            domain=['Pax Schengen', 'Pax Non-Schengen'],
+            range=['#E6E6E6', '#9E9E9E']  # gris clair / gris foncé
+        )
+        brand_scale = alt.Scale(
+            domain=['Pax Schengen', 'Pax Non-Schengen'],
+            range=['#2E86C1', '#17A589']  # adapte à ta charte si besoin
+        )
+        
         chart_compare = alt.Chart(pax_long).mark_bar().encode(
             x=alt.X('Heure:O', sort=None, title='Heure'),
             y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
-            color=alt.Color('Zone:N', title='Zone'),
             xOffset=alt.XOffset('Type:N', title='Type'),
-            tooltip=['Heure', 'Type', 'Zone', 'Passagers']
+            tooltip=['Heure', 'Type', 'Zone', 'Passagers'],
+            # Historique -> gris (clair/foncé), Prévisions -> couleurs brand
+            color=alt.condition(
+                alt.datum.Type == 'Historique',
+                alt.Color('Zone:N', scale=gray_scale, legend=None),
+                alt.Color('Zone:N', scale=brand_scale, legend=alt.Legend(title='Zone'))
+            )
         ).properties().interactive()
-
+        
         st.altair_chart(chart_compare, use_container_width=True)
+
 
     else:
         st.info("Veuillez sélectionner une date historique et une date prévisionnelle.")
