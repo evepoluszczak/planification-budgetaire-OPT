@@ -161,6 +161,7 @@ def parse_invoice_pdf(pdf_path: Path) -> Dict:
             total_cout = 0.0
 
             # Extraire toutes les lignes correspondant au pattern
+            all_matches = []
             for match in ROW_PATTERN.finditer(all_text):
                 price = _normalize_number(match.group("price"))
                 qty = _normalize_number(match.group("qty"))
@@ -170,10 +171,23 @@ def parse_invoice_pdf(pdf_path: Path) -> Dict:
                 # Nettoyer les espaces multiples
                 label = re.sub(r"\s{2,}", " ", label)
 
-                # Filtrer: ne garder que les lignes "Heures XXX"
-                if not re.search(r"\bHeures?\b", label, re.IGNORECASE):
+                # Filtrer: ne garder que les lignes "Heures XXX" ou "Heure XXX"
+                # Pattern flexible: cherche "heure" ou "heures" (case insensitive)
+                if not re.search(r"\bheure(s)?\b", label, re.IGNORECASE):
                     continue
 
+                all_matches.append((price, qty, label, amount))
+
+            # Afficher toutes les lignes capturées pour debug
+            if all_matches:
+                st.info(f"🔍 {len(all_matches)} lignes de facturation détectées dans {pdf_path.name}")
+                for price, qty, label, amount in all_matches[:5]:  # Afficher max 5 premières
+                    st.caption(f"  → '{label}': {qty:.1f}h × {price:.2f} = {amount:.2f} CHF")
+                if len(all_matches) > 5:
+                    st.caption(f"  ... et {len(all_matches) - 5} autres lignes")
+
+            # Traiter chaque match
+            for price, qty, label, amount in all_matches:
                 # Inférer la catégorie depuis le libellé
                 categorie = _infer_category_from_label(label)
 
