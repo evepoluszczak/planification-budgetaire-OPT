@@ -182,32 +182,44 @@ def render_comparaison_historique_page():
             var_name='Zone', value_name='Passagers'
         )
 
-        # Graphique Altair comparatif
-        # --- Couleurs ---
+        # --- Graphique Altair comparatif avec couleurs différenciées ---
+        # Historique : gris clair/foncé ; Prévisions : couleurs brand
         gray_scale = alt.Scale(
             domain=['Pax Schengen', 'Pax Non-Schengen'],
-            range=['#E6E6E6', '#9E9E9E']  # gris clair / gris foncé
+            range=['#E0E0E0', '#A0A0A0']  # gris clair / gris foncé
         )
         brand_scale = alt.Scale(
             domain=['Pax Schengen', 'Pax Non-Schengen'],
             range=['#2E86C1', '#17A589']  # adapte à ta charte si besoin
         )
-        
-        chart_compare = alt.Chart(pax_long).mark_bar().encode(
-            x=alt.X('Heure:O', sort=None, title='Heure'),
-            y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
-            xOffset=alt.XOffset('Type:N', title='Type'),
-            tooltip=['Heure', 'Type', 'Zone', 'Passagers'],
-            # Historique -> gris (clair/foncé), Prévisions -> couleurs brand
-            color=alt.condition(
-                alt.datum.Type == 'Historique',
-                alt.Color('Zone:N', scale=gray_scale, legend=None),
-                alt.Color('Zone:N', scale=brand_scale, legend=alt.Legend(title='Zone'))
-            )
-        ).properties().interactive()
-        
-        st.altair_chart(chart_compare, use_container_width=True)
 
+        chart_compare = (
+            alt.Chart(pax_long)
+            .mark_bar()
+            .encode(
+                x=alt.X('Heure:O', sort=None, title='Heure'),
+                y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
+                xOffset=alt.XOffset('Type:N', title='Type'),
+                tooltip=['Heure', 'Type', 'Zone', 'Passagers'],
+                color=alt.condition(
+                    alt.datum.Type == 'Historique',
+                    alt.Color('Zone:N', scale=gray_scale, legend=None),
+                    alt.Color('Zone:N', scale=brand_scale, legend=alt.Legend(title='Zone'))
+                )
+            )
+            .properties(height=400)
+            .interactive()
+        )
+
+        # Petite astuce UI
+        st.markdown(
+            "<span style='font-size:0.9em; font-style:italic; color:#666;'>"
+            "💡 Astuce : survolez une barre pour voir le détail, et utilisez l'outil de zoom/pan."
+            "</span>",
+            unsafe_allow_html=True
+        )
+
+        st.altair_chart(chart_compare, use_container_width=True)
 
     else:
         st.info("Veuillez sélectionner une date historique et une date prévisionnelle.")
