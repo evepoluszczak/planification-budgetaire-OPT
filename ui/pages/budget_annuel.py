@@ -181,20 +181,21 @@ def render_budget_annuel_page():
                     df_formation_display['Nbre de shifts']
                 )
 
-                # Afficher le tableau avec les totaux calculés (lecture seule)
-                st.caption("📊 Aperçu avec totaux calculés :")
-                st.dataframe(
-                    df_formation_display,
-                    column_config={
-                        'Dénomination': st.column_config.TextColumn('Dénomination'),
-                        'Effectif (pers.)': st.column_config.NumberColumn('Effectif (pers.)', format='%d'),
-                        'Heures': st.column_config.NumberColumn('Heures', format='%.1f'),
-                        'Nbre de shifts': st.column_config.NumberColumn('Nbre de shifts', format='%d'),
-                        'Total (heures)': st.column_config.NumberColumn('Total (heures)', format='%.1f')
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
+                # Afficher le tableau avec les totaux calculés (lecture seule) en expandable
+                with st.expander("📊 Aperçu avec totaux calculés", expanded=False):
+                    st.dataframe(
+                        df_formation_display,
+                        column_config={
+                            'Dénomination': st.column_config.TextColumn('Dénomination'),
+                            'Effectif (pers.)': st.column_config.NumberColumn('Effectif (pers.)', format='%d'),
+                            'Heures': st.column_config.NumberColumn('Heures', format='%.1f'),
+                            'Nbre de shifts': st.column_config.NumberColumn('Nbre de shifts', format='%d'),
+                            'Total (heures)': st.column_config.NumberColumn('Total (heures)', format='%.1f')
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+
 
                 # Boutons de gestion
                 col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
@@ -364,20 +365,20 @@ def render_budget_annuel_page():
                     df_formateurs_display['Nbre de shifts']
                 )
 
-                # Afficher le tableau avec les totaux calculés (lecture seule)
-                st.caption("📊 Aperçu avec totaux calculés :")
-                st.dataframe(
-                    df_formateurs_display,
-                    column_config={
-                        'Dénomination': st.column_config.TextColumn('Dénomination'),
-                        'Effectif (pers.)': st.column_config.NumberColumn('Effectif (pers.)', format='%d'),
-                        'Heures': st.column_config.NumberColumn('Heures', format='%.1f'),
-                        'Nbre de shifts': st.column_config.NumberColumn('Nbre de shifts', format='%d'),
-                        'Total (heures)': st.column_config.NumberColumn('Total (heures)', format='%.1f')
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
+                # Afficher le tableau avec les totaux calculés (lecture seule) en expandable
+                with st.expander("📊 Aperçu avec totaux calculés", expanded=False):
+                    st.dataframe(
+                        df_formateurs_display,
+                        column_config={
+                            'Dénomination': st.column_config.TextColumn('Dénomination'),
+                            'Effectif (pers.)': st.column_config.NumberColumn('Effectif (pers.)', format='%d'),
+                            'Heures': st.column_config.NumberColumn('Heures', format='%.1f'),
+                            'Nbre de shifts': st.column_config.NumberColumn('Nbre de shifts', format='%d'),
+                            'Total (heures)': st.column_config.NumberColumn('Total (heures)', format='%.1f')
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
 
                 # Boutons de gestion
                 col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
