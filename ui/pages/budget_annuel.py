@@ -507,37 +507,47 @@ def render_budget_annuel_page():
                     unsafe_allow_html=True
                 )
 
+                # --- (remplace l'ancien bloc 'if total_heures_formation > 0 or total_heures_formateurs > 0: ...') ---
                 if total_heures_formation > 0 or total_heures_formateurs > 0:
-                    # Rangée 1 : Formation / Doublure & Formateurs (côte à côte)
-                    row1 = '<div class="kpi-cards">'
-                    if total_heures_formation > 0:
-                        row1 += f'''
-                        <div class="kpi-card kpi-green">
-                            <div class="label">Formation / Doublure AT</div>
-                            <div class="value">{total_heures_formation:,.1f} h / {total_cout_formation:,.0f} CHF</div>
-                        </div>'''
-                    if total_heures_formateurs > 0:
-                        row1 += f'''
-                        <div class="kpi-card kpi-green">
-                            <div class="label">Shift AT Formateurs</div>
-                            <div class="value">{total_heures_formateurs:,.1f} h / {total_cout_formateurs:,.0f} CHF</div>
-                        </div>'''
-                    row1 += '</div>'
-                    st.markdown(row1, unsafe_allow_html=True)
+                    # Petit style pour la sous-ligne
+                    st.markdown("""
+                    <style>
+                    .kpi-card .sub {
+                        margin-top: .25rem;
+                        font-size: .85em;
+                        color: #6b7280; /* gris neutre */
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
                 
-                    # Rangée 2 : deux KPI (heures & coût) en dessous
+                    # Sous-lignes (heures et coût)
+                    breakdown_heures = (
+                        f"<div class='sub'>dont {total_heures_formation:,.1f} heure"
+                        f"{'' if abs(total_heures_formation - 1) < 1e-9 else 's'} Formation "
+                        f"et {total_heures_formateurs:,.1f} heure"
+                        f"{'' if abs(total_heures_formateurs - 1) < 1e-9 else 's'} de shifts AT</div>"
+                    )
+                    breakdown_cout = (
+                        f"<div class='sub'>dont {total_cout_formation:,.0f} CHF Formation "
+                        f"et {total_cout_formateurs:,.0f} CHF de shifts AT</div>"
+                    )
+                
+                    # KPI Totaux (une seule rangée, avec sous-lignes)
                     st.markdown(f'''
                         <div class="kpi-cards">
                             <div class="kpi-card kpi-blue">
                                 <div class="label">Total Heures (avec formation)</div>
                                 <div class="value">{total_heures_global:,.0f} h</div>
+                                {breakdown_heures}
                             </div>
                             <div class="kpi-card kpi-amber">
                                 <div class="label">Total Coût (avec formation)</div>
                                 <div class="value">{total_cout_global:,.0f} CHF</div>
+                                {breakdown_cout}
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
+
 
                 # --- Répartition Coût et Heure par Catégorie ---
                 st.markdown("---")
