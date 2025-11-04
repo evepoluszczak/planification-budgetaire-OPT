@@ -222,8 +222,6 @@ def render_comparaison_historique_page():
                     legend=alt.Legend(
                         orient='bottom',          # Légende sous le graphe
                         direction='horizontal',   # Alignée horizontalement
-                        anchor='middle',          # Centrée sous le graphique
-                        titleAnchor='middle',     # Centre le titre aussi
                         titleAlign='center',
                         labelFontSize=11,
                         symbolSize=120,
