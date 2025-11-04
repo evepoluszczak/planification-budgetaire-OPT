@@ -214,18 +214,22 @@ def render_comparaison_historique_page():
                 x=alt.X('Heure:O', sort=None, title='Heure'),
                 y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
                 xOffset='Type:N',
-                color=alt.Color('Zone_Type:N', title='Zone', scale=custom_scale),
+                color=alt.Color(
+                    'Zone_Type:N',
+                    title='Catégorie',
+                    scale=custom_scale,
+                    legend=alt.Legend(
+                        orient='bottom',          # Légende en dessous du graphe
+                        direction='horizontal',   # En ligne
+                        titleAnchor='middle',
+                        labelFontSize=11,
+                        symbolSize=120
+                    )
+                ),
                 tooltip=['Heure', 'Type', 'Zone', 'Passagers']
             )
             .properties(height=400)
             .interactive()
-        )
-        
-        st.markdown(
-            "<span style='font-size:0.9em; font-style:italic; color:#666;'>"
-            "💡 Astuce : survolez une barre pour voir le détail, et utilisez le zoom/pan Altair."
-            "</span>",
-            unsafe_allow_html=True
         )
         
         st.altair_chart(chart_compare, use_container_width=True)
