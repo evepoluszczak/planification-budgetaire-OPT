@@ -222,6 +222,8 @@ def render_comparaison_historique_page():
                         orient='bottom',          # Légende en dessous du graphe
                         direction='horizontal',   # En ligne
                         titleAnchor='middle',
+                        anchor='middle',
+                        titleAlign='center,
                         labelFontSize=11,
                         symbolSize=120
                     )
