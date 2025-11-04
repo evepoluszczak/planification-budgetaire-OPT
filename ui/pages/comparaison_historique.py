@@ -215,17 +215,19 @@ def render_comparaison_historique_page():
                 y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
                 xOffset='Type:N',
                 color=alt.Color(
+                    
                     'Zone_Type:N',
                     title='',
                     scale=custom_scale,
                     legend=alt.Legend(
-                        orient='bottom',          # Légende en dessous du graphe
-                        direction='horizontal',   # En ligne
-                        titleAnchor='middle',
-                        anchor='middle',
+                        orient='bottom',          # Légende sous le graphe
+                        direction='horizontal',   # Alignée horizontalement
+                        anchor='middle',          # Centrée sous le graphique
+                        titleAnchor='middle',     # Centre le titre aussi
                         titleAlign='center',
                         labelFontSize=11,
-                        symbolSize=120
+                        symbolSize=120,
+                        padding=10
                     )
                 ),
                 tooltip=['Heure', 'Type', 'Zone', 'Passagers']
