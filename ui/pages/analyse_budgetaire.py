@@ -738,7 +738,7 @@ def render_analyse_budgetaire_page():
                     df_cout_budgets = df_cout_mensuel[df_cout_mensuel['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
 
                     chart_cout_bars = alt.Chart(df_cout_realise).mark_bar(size=30).encode(
-                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        x=alt.X('Mois:T', title='', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
                         color=alt.Color('Type:N',
                             scale=alt.Scale(domain=color_domain, range=color_range),
@@ -751,7 +751,7 @@ def render_analyse_budgetaire_page():
                     )
 
                     chart_cout_lines = alt.Chart(df_cout_budgets).mark_line(point=True, strokeWidth=2).encode(
-                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        x=alt.X('Mois:T', title='', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
                         color=alt.Color('Type:N',
                             scale=alt.Scale(domain=color_domain, range=color_range),
@@ -777,7 +777,7 @@ def render_analyse_budgetaire_page():
                     df_heures_budgets = df_heures_mensuel[df_heures_mensuel['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
 
                     chart_heures_bars = alt.Chart(df_heures_realise).mark_bar(size=30).encode(
-                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        x=alt.X('Mois:T', title='', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Heures:Q', title='Heures Mensuelles'),
                         color=alt.Color('Type:N',
                             scale=alt.Scale(domain=color_domain, range=color_range),
@@ -790,7 +790,7 @@ def render_analyse_budgetaire_page():
                     )
 
                     chart_heures_lines = alt.Chart(df_heures_budgets).mark_line(point=True, strokeWidth=2).encode(
-                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        x=alt.X('Mois:T', title='', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Heures:Q', title='Heures Mensuelles'),
                         color=alt.Color('Type:N',
                             scale=alt.Scale(domain=color_domain, range=color_range),
