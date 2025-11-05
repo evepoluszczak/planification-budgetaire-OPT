@@ -446,7 +446,7 @@ def render_analyse_budgetaire_page():
     year = st.number_input("Année d'analyse :", value=default_year, min_value=2023, max_value=2050, key="analyse_budget_year")
 
     # === Zone dédiée : Visualiser une facture mensuelle (n'affecte rien) ===
-    with st.expander("🔎 Visualiser une facture mensuelle (optionnel, n'affecte pas les calculs)", expanded=False):
+    with st.expander("🔎 Visualiser le détail d'une facture mensuelle", expanded=False):
         # Ligne de contrôle (mois + bouton)
         with st.form(key="invoice_viewer_form", clear_on_submit=False):
             c1, c2 = st.columns([3, 1])
