@@ -501,6 +501,12 @@ def _month_selector(label: str, default_month: int) -> int:
     pick = st.selectbox(label, options=list(zip(months, month_names)), index=idx, format_func=lambda t: t[1])
     return pick[0]
 
+def _scalar_from_df(df: pd.DataFrame, col: str, default: float = 0.0) -> float:
+    """Récupère proprement un scalaire depuis la 1re ligne d'une colonne."""
+    if isinstance(df, pd.DataFrame) and col in df.columns and len(df) > 0:
+        return float(pd.to_numeric(df[col], errors='coerce').fillna(0).iloc[0])
+    return float(default)
+
 
 # ============================================================
 # Viewer d'UNE facture mensuelle (sans impact sur le reste)
@@ -560,11 +566,14 @@ def _view_single_invoice(year: int, month: int, factu_dir: Path):
         if df_one.empty:
             st.info("Le fichier ne contient aucune ligne exploitable (nouveau format).")
             return
+
         st.caption("Format: **Nouveau** (Libellé / Quantité / Prix / Montant)")
         st.dataframe(df_one, use_container_width=True, hide_index=True)
-        # KPI mois (issus du parseur)
-        heures_total = float(df_one.get('Heures_Total', 0) or 0)
-        cout_total = float(df_one.get('Cout_Total', 0) or 0)
+
+        # KPI sûrs (scalars)
+        heures_total = _scalar_from_df(df_one, 'Heures_Total', 0.0)
+        cout_total = _scalar_from_df(df_one, 'Cout_Total', 0.0)
+
         c1, c2 = st.columns(2)
         c1.metric("Heures (mois)", f"{heures_total:,.1f}".replace(",", " ") + " h")
         c2.metric("Coût (mois)", f"{cout_total:,.2f}".replace(",", " ") + " CHF")
@@ -574,9 +583,16 @@ def _view_single_invoice(year: int, month: int, factu_dir: Path):
         if df_one.empty:
             st.info("Le fichier ne contient aucune ligne exploitable (ancien format).")
             return
+
         st.caption("Format: **Ancien** (Date ouvrable / Heures)")
         st.dataframe(df_one, use_container_width=True, hide_index=True)
-        heures_total = float(df_one['Heures_Total'].sum() if 'Heures_Total' in df_one.columns else df_one['Heures'].sum())
+
+        heures_total = float(
+            pd.to_numeric(
+                df_one['Heures_Total'] if 'Heures_Total' in df_one.columns else df_one['Heures'],
+                errors='coerce'
+            ).fillna(0).sum()
+        )
         st.metric("Heures (mois)", f"{heures_total:,.1f}".replace(",", " ") + " h")
 
 
