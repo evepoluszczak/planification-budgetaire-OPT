@@ -688,33 +688,75 @@ def render_analyse_budgetaire_page():
             tab_cout_m, tab_heures_m = st.tabs(["💰 Coûts Mensuels (CHF)", "⏱️ Heures Mensuelles"])
             with tab_cout_m:
                 if not df_cout_mensuel.empty:
-                    chart_cout_m = alt.Chart(df_cout_mensuel).mark_bar().encode(
+                    # Séparer les données : barres pour Réalisé, lignes pour les budgets
+                    df_cout_realise = df_cout_mensuel[df_cout_mensuel['Type'] == 'Réalisé'].copy()
+                    df_cout_budgets = df_cout_mensuel[df_cout_mensuel['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
+
+                    # Barres pour le réalisé
+                    chart_cout_bars = alt.Chart(df_cout_realise).mark_bar(size=30).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié','Réalisé'],
-                                                                  range=['#0076aa','#ffa500','#dc143c']),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Réalisé'], range=['#dc143c']),
                                         legend=alt.Legend(title='Type de Budget')),
-                        xOffset=alt.XOffset('Type:N'),
                         tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
                                  alt.Tooltip('Type:N', title='Type'),
                                  alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')]
-                    ).properties(height=400).interactive()
+                    )
+
+                    # Lignes pointillées pour les budgets
+                    chart_cout_lines = alt.Chart(df_cout_budgets).mark_line(point=True, strokeWidth=2).encode(
+                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié'],
+                                                                  range=['#0076aa','#ffa500']),
+                                        legend=alt.Legend(title='Type de Budget')),
+                        strokeDash=alt.StrokeDash('Type:N',
+                                                   scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'],
+                                                                  range=[[5,5], [10,5]]),
+                                                   legend=None),
+                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                                 alt.Tooltip('Type:N', title='Type'),
+                                 alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')]
+                    )
+
+                    chart_cout_m = (chart_cout_bars + chart_cout_lines).properties(height=400).interactive()
                     st.altair_chart(chart_cout_m, use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des coûts mensuels.")
             with tab_heures_m:
                 if not df_heures_mensuel.empty:
-                    chart_heures_m = alt.Chart(df_heures_mensuel).mark_bar().encode(
+                    # Séparer les données : barres pour Réalisé, lignes pour les budgets
+                    df_heures_realise = df_heures_mensuel[df_heures_mensuel['Type'] == 'Réalisé'].copy()
+                    df_heures_budgets = df_heures_mensuel[df_heures_mensuel['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
+
+                    # Barres pour le réalisé
+                    chart_heures_bars = alt.Chart(df_heures_realise).mark_bar(size=30).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Heures:Q', title='Heures Mensuelles'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié','Réalisé'],
-                                                                  range=['#0076aa','#ffa500','#dc143c']),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Réalisé'], range=['#dc143c']),
                                         legend=alt.Legend(title='Type de Budget')),
-                        xOffset=alt.XOffset('Type:N'),
                         tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
                                  alt.Tooltip('Type:N', title='Type'),
                                  alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')]
-                    ).properties(height=400).interactive()
+                    )
+
+                    # Lignes pointillées pour les budgets
+                    chart_heures_lines = alt.Chart(df_heures_budgets).mark_line(point=True, strokeWidth=2).encode(
+                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        y=alt.Y('Heures:Q', title='Heures Mensuelles'),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié'],
+                                                                  range=['#0076aa','#ffa500']),
+                                        legend=alt.Legend(title='Type de Budget')),
+                        strokeDash=alt.StrokeDash('Type:N',
+                                                   scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'],
+                                                                  range=[[5,5], [10,5]]),
+                                                   legend=None),
+                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                                 alt.Tooltip('Type:N', title='Type'),
+                                 alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')]
+                    )
+
+                    chart_heures_m = (chart_heures_bars + chart_heures_lines).properties(height=400).interactive()
                     st.altair_chart(chart_heures_m, use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des heures mensuelles.")
