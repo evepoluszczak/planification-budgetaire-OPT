@@ -382,9 +382,7 @@ def _view_single_invoice(year: int, month: int, factu_dir: Path):
         k2.metric("Coût (mois)", f"{cout_total:,.2f}".replace(",", " ") + " CHF")
 
     # — Table détaillée PLEINE LARGEUR —
-    # Pour le nouveau format, on réaffiche un détail par type (lisible)
     if fmt == "new":
-        # Re-ouvre le fichier avec en-têtes pour la table lisible
         df_raw = pd.read_excel(file_path, header=None)
         header_row = None
         for idx, row in df_raw.iterrows():
@@ -400,7 +398,6 @@ def _view_single_invoice(year: int, month: int, factu_dir: Path):
         df['Montant'] = pd.to_numeric(df['Montant'], errors='coerce').fillna(0)
         df = df[df['Quantité'] > 0].copy()
 
-        # Détail par libellé pour la lisibilité
         df_display = df[['Libellé', 'Quantité', 'Prix', 'Montant']].copy()
         st.dataframe(
             df_display,
@@ -414,7 +411,6 @@ def _view_single_invoice(year: int, month: int, factu_dir: Path):
             }
         )
     else:
-        # Ancien format : table des jours
         st.dataframe(
             df_month[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy(),
             hide_index=True,
@@ -447,7 +443,6 @@ def render_analyse_budgetaire_page():
 
     # === Zone dédiée : Visualiser une facture mensuelle (n'affecte rien) ===
     with st.expander("🔎 Visualiser le détail d'une facture mensuelle", expanded=False):
-        # Ligne de contrôle (mois + bouton)
         with st.form(key="invoice_viewer_form", clear_on_submit=False):
             c1, c2 = st.columns([3, 1])
             with c1:
@@ -459,7 +454,6 @@ def render_analyse_budgetaire_page():
                 )
             with c2:
                 submitted = st.form_submit_button("Afficher la facture")
-        # Rendu plein écran sous la ligne de contrôle
         if submitted:
             _view_single_invoice(int(year), int(month_view), Path(FACTU_AT_DIR))
 
@@ -489,7 +483,7 @@ def render_analyse_budgetaire_page():
     heures_modifie_planif = budget_modifie.get('heures_total', 0.0)
     cout_modifie_planif = budget_modifie.get('cout_total', 0.0)
 
-    # Calculer les heures/coûts de formation (même logique que Budget Annuel et Besoin Jour)
+    # Formation (cohérente avec le reste de l'app)
     total_heures_formation = 0.0
     total_cout_formation = 0.0
     cout_horaire_at = 45.50
@@ -513,7 +507,7 @@ def render_analyse_budgetaire_page():
         total_heures_formation = df_formation['Total (heures)'].sum()
         total_cout_formation = total_heures_formation * cout_horaire_at
 
-    # Calculer les heures/coûts des formateurs (ATF)
+    # Formateurs (ATF)
     total_heures_formateurs = 0.0
     total_cout_formateurs = 0.0
     cout_horaire_atf = 52.00
@@ -537,7 +531,7 @@ def render_analyse_budgetaire_page():
         total_heures_formateurs = df_formateurs['Total (heures)'].sum()
         total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
 
-    # Totaux avec formation (cohérent avec Budget Annuel et Besoin Jour)
+    # Totaux avec formation
     heures_annuel = heures_annuel_planif + total_heures_formation + total_heures_formateurs
     cout_annuel = cout_annuel_planif + total_cout_formation + total_cout_formateurs
     heures_modifie = heures_modifie_planif + total_heures_formation + total_heures_formateurs
@@ -569,51 +563,99 @@ def render_analyse_budgetaire_page():
     ecart_cout_real_mod = cout_realise - cout_modifie
     ecart_cout_real_mod_pct = (ecart_cout_real_mod / cout_modifie * 100) if cout_modifie != 0 else 0
 
+    # --- KPI Coûts (couleurs fixées : Annuel bleu, Modifié orange, Réalisé rouge) ---
     st.markdown("---")
     st.subheader(f"📊 Synthèse {year} - Coûts (CHF)")
     c1, c2, c3 = st.columns(3)
+
     with c1:
-        st.markdown(f"""<div class="kpi-card kpi-blue"><div class="label">Budget Annuel</div>
-        <div class="value">{cout_annuel:,.0f} CHF</div><div class="delta">Prévision initiale</div></div>""", unsafe_allow_html=True)
+        st.markdown(
+            f"""<div class="kpi-card kpi-blue">
+            <div class="label">Budget Annuel</div>
+            <div class="value">{cout_annuel:,.0f} CHF</div>
+            <div class="delta">Prévision initiale</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
     with c2:
-        color = "kpi-green" if ecart_cout_mod_ann <= 0 else "kpi-amber"
         symb = "▼" if ecart_cout_mod_ann < 0 else "▲"
-        st.markdown(f"""<div class="kpi-card {color}"><div class="label">Budget Modifié</div>
-        <div class="value">{cout_modifie:,.0f} CHF</div>
-        <div class="delta">{symb} {abs(ecart_cout_mod_ann):,.0f} CHF ({ecart_cout_mod_ann_pct:+.1f}%)</div></div>""", unsafe_allow_html=True)
+        st.markdown(
+            f"""<div class="kpi-card kpi-amber">
+            <div class="label">Budget Modifié</div>
+            <div class="value">{cout_modifie:,.0f} CHF</div>
+            <div class="delta">{symb} {abs(ecart_cout_mod_ann):,.0f} CHF ({ecart_cout_mod_ann_pct:+.1f}%)</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
     with c3:
         if df_factu.empty:
-            st.markdown(f"""<div class="kpi-card kpi-amber"><div class="label">Réalisé</div>
-            <div class="value">— CHF</div><div class="delta">Aucune donnée de facturation pour {year}</div></div>""", unsafe_allow_html=True)
+            st.markdown(
+                f"""<div class="kpi-card kpi-amber">
+                <div class="label">Réalisé</div>
+                <div class="value">— CHF</div>
+                <div class="delta">Aucune donnée de facturation pour {year}</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
         else:
-            color = "kpi-green" if ecart_cout_real_mod <= 0 else "kpi-red"
-            symb = "▼" if ecart_cout_real_mod < 0 else "▲"
-            st.markdown(f"""<div class="kpi-card {color}"><div class="label">Réalisé</div>
-            <div class="value">{cout_realise:,.0f} CHF</div>
-            <div class="delta">{symb} {abs(ecart_cout_real_mod):,.0f} CHF ({ecart_cout_real_mod_pct:+.1f}%)</div></div>""", unsafe_allow_html=True)
+            symb_real = "▼" if ecart_cout_real_mod < 0 else "▲"
+            st.markdown(
+                f"""<div class="kpi-card kpi-red">
+                <div class="label">Réalisé</div>
+                <div class="value">{cout_realise:,.0f} CHF</div>
+                <div class="delta">{symb_real} {abs(ecart_cout_real_mod):,.0f} CHF ({ecart_cout_real_mod_pct:+.1f}%)</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
 
+    # --- KPI Heures (couleurs fixées : Annuel bleu, Modifié orange, Réalisé rouge) ---
     st.markdown("---")
     st.subheader(f"⏱️ Synthèse {year} - Heures")
     c1, c2, c3 = st.columns(3)
+
     with c1:
-        st.markdown(f"""<div class="kpi-card kpi-blue"><div class="label">Budget Annuel</div>
-        <div class="value">{heures_annuel:,.0f} h</div><div class="delta">Prévision initiale</div></div>""", unsafe_allow_html=True)
+        st.markdown(
+            f"""<div class="kpi-card kpi-blue">
+            <div class="label">Budget Annuel</div>
+            <div class="value">{heures_annuel:,.0f} h</div>
+            <div class="delta">Prévision initiale</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
     with c2:
-        color = "kpi-green" if ecart_heures_mod_ann <= 0 else "kpi-amber"
         symb = "▼" if ecart_heures_mod_ann < 0 else "▲"
-        st.markdown(f"""<div class="kpi-card {color}"><div class="label">Budget Modifié</div>
-        <div class="value">{heures_modifie:,.0f} h</div>
-        <div class="delta">{symb} {abs(ecart_heures_mod_ann):,.0f} h ({ecart_heures_mod_ann_pct:+.1f}%)</div></div>""", unsafe_allow_html=True)
+        st.markdown(
+            f"""<div class="kpi-card kpi-amber">
+            <div class="label">Budget Modifié</div>
+            <div class="value">{heures_modifie:,.0f} h</div>
+            <div class="delta">{symb} {abs(ecart_heures_mod_ann):,.0f} h ({ecart_heures_mod_ann_pct:+.1f}%)</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
     with c3:
         if df_factu.empty:
-            st.markdown(f"""<div class="kpi-card kpi-amber"><div class="label">Réalisé</div>
-            <div class="value">— h</div><div class="delta">Aucune donnée de facturation pour {year}</div></div>""", unsafe_allow_html=True)
+            st.markdown(
+                f"""<div class="kpi-card kpi-amber">
+                <div class="label">Réalisé</div>
+                <div class="value">— h</div>
+                <div class="delta">Aucune donnée de facturation pour {year}</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
         else:
-            color = "kpi-green" if ecart_heures_real_mod <= 0 else "kpi-red"
-            symb = "▼" if ecart_heures_real_mod < 0 else "▲"
-            st.markdown(f"""<div class="kpi-card {color}"><div class="label">Réalisé</div>
-            <div class="value">{heures_realise:,.0f} h</div>
-            <div class="delta">{symb} {abs(ecart_heures_real_mod):,.0f} h ({ecart_heures_real_mod_pct:+.1f}%)</div></div>""", unsafe_allow_html=True)
+            symb_real = "▼" if ecart_heures_real_mod < 0 else "▲"
+            st.markdown(
+                f"""<div class="kpi-card kpi-red">
+                <div class="label">Réalisé</div>
+                <div class="value">{heures_realise:,.0f} h</div>
+                <div class="delta">{symb_real} {abs(ecart_heures_real_mod):,.0f} h ({ecart_heures_real_mod_pct:+.1f}%)</div>
+                </div>""",
+                unsafe_allow_html=True
+            )
 
     # =================== Évolution Mensuelle (Non Cumulée) ===================
     st.markdown("---")
@@ -685,75 +727,82 @@ def render_analyse_budgetaire_page():
             df_heures_mensuel = df_heures_mensuel.dropna(subset=['Heures'])
             df_cout_mensuel = df_cout_mensuel.dropna(subset=['Cout'])
 
+            # Couleurs cohérentes
+            color_domain = ['Budget Annuel', 'Budget Modifié', 'Réalisé']
+            color_range = ['#0076aa', '#ffa500', '#dc143c']
+
             tab_cout_m, tab_heures_m = st.tabs(["💰 Coûts Mensuels (CHF)", "⏱️ Heures Mensuelles"])
             with tab_cout_m:
                 if not df_cout_mensuel.empty:
-                    # Séparer les données : barres pour Réalisé, lignes pour les budgets
                     df_cout_realise = df_cout_mensuel[df_cout_mensuel['Type'] == 'Réalisé'].copy()
                     df_cout_budgets = df_cout_mensuel[df_cout_mensuel['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
 
-                    # Barres pour le réalisé
                     chart_cout_bars = alt.Chart(df_cout_realise).mark_bar(size=30).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Réalisé'], range=['#dc143c']),
-                                        legend=alt.Legend(title='Type de Budget')),
-                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
-                                 alt.Tooltip('Type:N', title='Type'),
-                                 alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')]
+                        color=alt.Color('Type:N',
+                            scale=alt.Scale(domain=color_domain, range=color_range),
+                            legend=alt.Legend(title='Type de Budget')),
+                        tooltip=[
+                            alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                            alt.Tooltip('Type:N', title='Type'),
+                            alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')
+                        ]
                     )
 
-                    # Lignes pointillées pour les budgets
                     chart_cout_lines = alt.Chart(df_cout_budgets).mark_line(point=True, strokeWidth=2).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié'],
-                                                                  range=['#0076aa','#ffa500']),
-                                        legend=alt.Legend(title='Type de Budget')),
+                        color=alt.Color('Type:N',
+                            scale=alt.Scale(domain=color_domain, range=color_range),
+                            legend=alt.Legend(title='Type de Budget')),
                         strokeDash=alt.StrokeDash('Type:N',
-                                                   scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'],
-                                                                  range=[[5,5], [10,5]]),
-                                                   legend=None),
-                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
-                                 alt.Tooltip('Type:N', title='Type'),
-                                 alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')]
+                            scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'], range=[[5,5],[10,5]]),
+                            legend=None),
+                        tooltip=[
+                            alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                            alt.Tooltip('Type:N', title='Type'),
+                            alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')
+                        ]
                     )
 
                     chart_cout_m = (chart_cout_bars + chart_cout_lines).properties(height=400).interactive()
                     st.altair_chart(chart_cout_m, use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des coûts mensuels.")
+
             with tab_heures_m:
                 if not df_heures_mensuel.empty:
-                    # Séparer les données : barres pour Réalisé, lignes pour les budgets
                     df_heures_realise = df_heures_mensuel[df_heures_mensuel['Type'] == 'Réalisé'].copy()
                     df_heures_budgets = df_heures_mensuel[df_heures_mensuel['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
 
-                    # Barres pour le réalisé
                     chart_heures_bars = alt.Chart(df_heures_realise).mark_bar(size=30).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Heures:Q', title='Heures Mensuelles'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Réalisé'], range=['#dc143c']),
-                                        legend=alt.Legend(title='Type de Budget')),
-                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
-                                 alt.Tooltip('Type:N', title='Type'),
-                                 alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')]
+                        color=alt.Color('Type:N',
+                            scale=alt.Scale(domain=color_domain, range=color_range),
+                            legend=alt.Legend(title='Type de Budget')),
+                        tooltip=[
+                            alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                            alt.Tooltip('Type:N', title='Type'),
+                            alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')
+                        ]
                     )
 
-                    # Lignes pointillées pour les budgets
                     chart_heures_lines = alt.Chart(df_heures_budgets).mark_line(point=True, strokeWidth=2).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Heures:Q', title='Heures Mensuelles'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié'],
-                                                                  range=['#0076aa','#ffa500']),
-                                        legend=alt.Legend(title='Type de Budget')),
+                        color=alt.Color('Type:N',
+                            scale=alt.Scale(domain=color_domain, range=color_range),
+                            legend=alt.Legend(title='Type de Budget')),
                         strokeDash=alt.StrokeDash('Type:N',
-                                                   scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'],
-                                                                  range=[[5,5], [10,5]]),
-                                                   legend=None),
-                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
-                                 alt.Tooltip('Type:N', title='Type'),
-                                 alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')]
+                            scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'], range=[[5,5],[10,5]]),
+                            legend=None),
+                        tooltip=[
+                            alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                            alt.Tooltip('Type:N', title='Type'),
+                            alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')
+                        ]
                     )
 
                     chart_heures_m = (chart_heures_bars + chart_heures_lines).properties(height=400).interactive()
@@ -837,15 +886,18 @@ def render_analyse_budgetaire_page():
             df_heures_plot = df_heures_plot.dropna(subset=['Heures_Cumul'])
             df_cout_plot = df_cout_plot.dropna(subset=['Cout_Cumul'])
 
+            color_domain = ['Budget Annuel', 'Budget Modifié', 'Réalisé']
+            color_range = ['#0076aa', '#ffa500', '#dc143c']
+
             tab_cout, tab_heures = st.tabs(["💰 Coûts Cumulés (CHF)", "⏱️ Heures Cumulées"])
             with tab_cout:
                 if not df_cout_plot.empty:
                     chart_cout = alt.Chart(df_cout_plot).mark_line(point=True, strokeWidth=3).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Cout_Cumul:Q', title='Coût Cumulé (CHF)'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié','Réalisé'],
-                                                                  range=['#0076aa','#ffa500','#dc143c']),
-                                        legend=alt.Legend(title='Type de Budget')),
+                        color=alt.Color('Type:N',
+                            scale=alt.Scale(domain=color_domain, range=color_range),
+                            legend=alt.Legend(title='Type de Budget')),
                         tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
                                  alt.Tooltip('Type:N', title='Type'),
                                  alt.Tooltip('Cout_Cumul:Q', title='Coût Cumulé', format=',.0f')]
@@ -858,9 +910,9 @@ def render_analyse_budgetaire_page():
                     chart_heures = alt.Chart(df_heures_plot).mark_line(point=True, strokeWidth=3).encode(
                         x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
                         y=alt.Y('Heures_Cumul:Q', title='Heures Cumulées'),
-                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié','Réalisé'],
-                                                                  range=['#0076aa','#ffa500','#dc143c']),
-                                        legend=alt.Legend(title='Type de Budget')),
+                        color=alt.Color('Type:N',
+                            scale=alt.Scale(domain=color_domain, range=color_range),
+                            legend=alt.Legend(title='Type de Budget')),
                         tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
                                  alt.Tooltip('Type:N', title='Type'),
                                  alt.Tooltip('Heures_Cumul:Q', title='Heures Cumulées', format=',.0f')]
@@ -874,26 +926,24 @@ def render_analyse_budgetaire_page():
             st.error(traceback.format_exc())
 
     # =================== Tableau Détaillé Mensuel ===================
-    
     st.markdown("---")
     st.subheader("📋 Détail Mensuel")
-    
+
     if not calendar_with_modif.empty and 'monthly_combined' in locals():
         try:
             # Base : données Modifié
             monthly_table = monthly_combined.copy()
             monthly_table['Mois'] = monthly_table['Mois_str']
-    
+
             # Colonnes Modifié (sécurité)
             monthly_table['Heures_Modifie'] = monthly_table.get('Heures_Modifie', 0).fillna(0)
             monthly_table['Cout_Modifie'] = monthly_table.get('Cout_Modifie', 0).fillna(0)
-    
+
             # Ajout des colonnes "Facturées" (si factures dispo)
             if not df_factu.empty:
                 monthly_factu_raw = df_factu.groupby('Mois').agg({'Heures_Total': 'sum'}).reset_index()
-                # clef de jointure = texte AAAA-MM
                 monthly_factu_raw['Mois_str'] = monthly_factu_raw['Mois'].astype(str)
-    
+
                 # Tarif AT pour valoriser le coût facturé
                 tarif_at = 0.0
                 personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
@@ -903,33 +953,28 @@ def render_analyse_budgetaire_page():
                         row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
                         if not row_tarif.empty:
                             tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
-    
+
                 monthly_factu_raw['Cout_Facture'] = monthly_factu_raw['Heures_Total'] * tarif_at
-    
-                # Pour éviter tout conflit de nom, on renomme la clef côté droit
+
                 right = monthly_factu_raw[['Mois_str', 'Heures_Total', 'Cout_Facture']].rename(
                     columns={'Mois_str': '__MoisKey__'}
                 )
-    
-                # Merge sur la clef texte
+
                 monthly_table = monthly_table.merge(
                     right,
                     left_on='Mois',
                     right_on='__MoisKey__',
                     how='left'
                 )
-    
-                # Nettoyage des colonnes techniques si elles existent
+
                 if '__MoisKey__' in monthly_table.columns:
                     monthly_table.drop(columns='__MoisKey__', inplace=True)
-    
-                # Renommer pour l'affichage
+
                 monthly_table.rename(columns={'Heures_Total': 'Heures_Facturees'}, inplace=True)
             else:
-                # Colonnes vides si pas de factures
                 monthly_table['Heures_Facturees'] = pd.NA
                 monthly_table['Cout_Facture'] = pd.NA
-    
+
             # Colonnes finales à afficher (sans Annuel)
             columns_to_show = [
                 'Mois',
@@ -938,7 +983,7 @@ def render_analyse_budgetaire_page():
                 'Heures_Facturees',
                 'Cout_Facture'
             ]
-    
+
             df_monthly_display = monthly_table[columns_to_show].copy()
             df_monthly_display.columns = [
                 'Mois',
@@ -947,8 +992,7 @@ def render_analyse_budgetaire_page():
                 'Heures Facturées',
                 'Coût Facturé (CHF)'
             ]
-    
-            # Configuration des colonnes
+
             col_config = {
                 'Mois': st.column_config.TextColumn('Mois'),
                 'Heures Modifié': st.column_config.NumberColumn('Heures Modifié', format='%.0f h'),
@@ -956,20 +1000,18 @@ def render_analyse_budgetaire_page():
                 'Heures Facturées': st.column_config.NumberColumn('Heures Facturées', format='%.0f h'),
                 'Coût Facturé (CHF)': st.column_config.NumberColumn('Coût Facturé', format='%.0f CHF'),
             }
-    
+
             st.dataframe(
                 df_monthly_display,
                 column_config=col_config,
                 hide_index=True,
                 use_container_width=True
             )
-    
+
         except Exception as e:
             st.error(f"Erreur lors de la création du tableau mensuel: {e}")
             import traceback
             st.error(traceback.format_exc())
-
-
 
     # =================== Notes ===================
     with st.expander("ℹ️ Informations sur l'Analyse Budgétaire"):
