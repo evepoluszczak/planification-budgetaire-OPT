@@ -484,10 +484,64 @@ def render_analyse_budgetaire_page():
 
     # =================== Données Budget Annuel & Modifié ===================
     totals_annuel = bs.get('totals', {})
-    heures_annuel = totals_annuel.get('heures_annuel', 0.0)
-    cout_annuel = totals_annuel.get('cout_annuel', 0.0)
-    heures_modifie = budget_modifie.get('heures_total', 0.0)
-    cout_modifie = budget_modifie.get('cout_total', 0.0)
+    heures_annuel_planif = totals_annuel.get('heures_annuel', 0.0)
+    cout_annuel_planif = totals_annuel.get('cout_annuel', 0.0)
+    heures_modifie_planif = budget_modifie.get('heures_total', 0.0)
+    cout_modifie_planif = budget_modifie.get('cout_total', 0.0)
+
+    # Calculer les heures/coûts de formation (même logique que Budget Annuel et Besoin Jour)
+    total_heures_formation = 0.0
+    total_cout_formation = 0.0
+    cout_horaire_at = 45.50
+    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+        at_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'AT']
+        if not at_row.empty:
+            try:
+                cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
+            except Exception:
+                pass
+    if 'budget_formation_at' in st.session_state:
+        df_formation = st.session_state.budget_formation_at.copy()
+        df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+        df_formation['Heures'] = df_formation.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
+        df_formation['Nbre de shifts'] = pd.to_numeric(df_formation.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+        df_formation['Total (heures)'] = (
+            df_formation['Effectif (pers.)'] *
+            df_formation['Heures'] *
+            df_formation['Nbre de shifts']
+        )
+        total_heures_formation = df_formation['Total (heures)'].sum()
+        total_cout_formation = total_heures_formation * cout_horaire_at
+
+    # Calculer les heures/coûts des formateurs (ATF)
+    total_heures_formateurs = 0.0
+    total_cout_formateurs = 0.0
+    cout_horaire_atf = 52.00
+    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+        atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
+        if not atf_row.empty:
+            try:
+                cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
+            except Exception:
+                pass
+    if 'budget_formateurs_at' in st.session_state:
+        df_formateurs = st.session_state.budget_formateurs_at.copy()
+        df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+        df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
+        df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+        df_formateurs['Total (heures)'] = (
+            df_formateurs['Effectif (pers.)'] *
+            df_formateurs['Heures'] *
+            df_formateurs['Nbre de shifts']
+        )
+        total_heures_formateurs = df_formateurs['Total (heures)'].sum()
+        total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
+
+    # Totaux avec formation (cohérent avec Budget Annuel et Besoin Jour)
+    heures_annuel = heures_annuel_planif + total_heures_formation + total_heures_formateurs
+    cout_annuel = cout_annuel_planif + total_cout_formation + total_cout_formateurs
+    heures_modifie = heures_modifie_planif + total_heures_formation + total_heures_formateurs
+    cout_modifie = cout_modifie_planif + total_cout_formation + total_cout_formateurs
 
     # =================== Données Réalisé ===================
     heures_realise = 0.0
