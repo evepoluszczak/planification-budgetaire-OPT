@@ -111,7 +111,13 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
 
     # Concaténer tous les mois
     result = pd.concat(all_data, ignore_index=True)
-    result = result.sort_values('Date').reset_index(drop=True)
+
+    # Normaliser la colonne Date avant le tri pour éviter les erreurs de type
+    if 'Date' in result.columns:
+        result['Date'] = pd.to_datetime(result['Date'], errors='coerce')
+        result = result.dropna(subset=['Date'])
+
+    result = result.sort_values('Date', na_position='last').reset_index(drop=True)
 
     return result
 
