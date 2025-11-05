@@ -96,8 +96,8 @@ def render_besoin_jour_page():
                     axis=1
                 ) if cout_cols_categories else 0.0
 
-                cur_hours_recalc = calendar_dyn['Heures_Total_Jour'].sum()
-                cur_cost_recalc = calendar_dyn['Coût_Total_Jour'].sum()
+                cur_hours_recalc_planif = calendar_dyn['Heures_Total_Jour'].sum()
+                cur_cost_recalc_planif = calendar_dyn['Coût_Total_Jour'].sum()
 
                 # Calculer les totaux de base (planification uniquement)
                 base_totals = bs.get('totals', {})
@@ -155,6 +155,10 @@ def render_besoin_jour_page():
                 # Totaux globaux avec formation (référence Budget Annuel)
                 base_hours = base_hours_planif + total_heures_formation + total_heures_formateurs
                 base_cost = base_cost_planif + total_cout_formation + total_cout_formateurs
+
+                # Ajouter formation et formateurs aux valeurs recalculées pour comparaison correcte
+                cur_hours_recalc = cur_hours_recalc_planif + total_heures_formation + total_heures_formateurs
+                cur_cost_recalc = cur_cost_recalc_planif + total_cout_formation + total_cout_formateurs
 
                 def _delta_str(cur, base, unit):
                     if base == 0:
