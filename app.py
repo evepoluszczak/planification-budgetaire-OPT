@@ -35,8 +35,6 @@ if 'show_help_dialog' not in st.session_state:
 if 'pax_loading_status' not in st.session_state:
     st.session_state.pax_loading_status = 'idle'
 
-# Note: Le chargement automatique PAX a été désactivé au profit du chargement manuel
-# via le bouton dans la sidebar pour ne pas bloquer l'application au démarrage
 
 # =================== Affichage principal ===================
 render_gva_header()
