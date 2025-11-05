@@ -99,9 +99,62 @@ def render_besoin_jour_page():
                 cur_hours_recalc = calendar_dyn['Heures_Total_Jour'].sum()
                 cur_cost_recalc = calendar_dyn['Coût_Total_Jour'].sum()
 
+                # Calculer les totaux de base (planification uniquement)
                 base_totals = bs.get('totals', {})
-                base_hours = float(base_totals.get('heures_annuel', 0.0))
-                base_cost = float(base_totals.get('cout_annuel', 0.0))
+                base_hours_planif = float(base_totals.get('heures_annuel', 0.0))
+                base_cost_planif = float(base_totals.get('cout_annuel', 0.0))
+
+                # Calculer les heures/coûts de formation (même logique que Budget Annuel)
+                total_heures_formation = 0.0
+                total_cout_formation = 0.0
+                cout_horaire_at = 45.50
+                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                    at_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'AT']
+                    if not at_row.empty:
+                        try:
+                            cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
+                        except Exception:
+                            pass
+                if 'budget_formation_at' in st.session_state:
+                    df_formation = st.session_state.budget_formation_at.copy()
+                    df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formation['Heures'] = df_formation.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
+                    df_formation['Nbre de shifts'] = pd.to_numeric(df_formation.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formation['Total (heures)'] = (
+                        df_formation['Effectif (pers.)'] *
+                        df_formation['Heures'] *
+                        df_formation['Nbre de shifts']
+                    )
+                    total_heures_formation = df_formation['Total (heures)'].sum()
+                    total_cout_formation = total_heures_formation * cout_horaire_at
+
+                # Calculer les heures/coûts des formateurs (ATF)
+                total_heures_formateurs = 0.0
+                total_cout_formateurs = 0.0
+                cout_horaire_atf = 52.00
+                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                    atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
+                    if not atf_row.empty:
+                        try:
+                            cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
+                        except Exception:
+                            pass
+                if 'budget_formateurs_at' in st.session_state:
+                    df_formateurs = st.session_state.budget_formateurs_at.copy()
+                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
+                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                    df_formateurs['Total (heures)'] = (
+                        df_formateurs['Effectif (pers.)'] *
+                        df_formateurs['Heures'] *
+                        df_formateurs['Nbre de shifts']
+                    )
+                    total_heures_formateurs = df_formateurs['Total (heures)'].sum()
+                    total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
+
+                # Totaux globaux avec formation (référence Budget Annuel)
+                base_hours = base_hours_planif + total_heures_formation + total_heures_formateurs
+                base_cost = base_cost_planif + total_cout_formation + total_cout_formateurs
 
                 def _delta_str(cur, base, unit):
                     if base == 0:
