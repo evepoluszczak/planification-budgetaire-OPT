@@ -9,18 +9,14 @@ import streamlit as st
 import altair as alt
 from config.constants import FACTU_AT_DIR, FACTU_AT_GLOB, TIME_SLOTS
 from core.planning import _ensure_grid, _apply_ops_to_grid
-from utils.pdf_parser import (
-    load_pdf_facturation_data,
-    get_category_mapping_for_pdf,
-    apply_category_mapping,
-    PDF_AVAILABLE
-)
 
 
 def load_facturation_data_for_year(year: int):
     """
-    Charge et agrège tous les fichiers de facturation pour une année donnée.
-    Supporte à la fois les fichiers Excel (.xlsx) et PDF (.pdf).
+    Charge et agrège tous les fichiers de facturation Excel pour une année donnée.
+    Supporte 2 formats:
+    - ANCIEN (avant sept 2025): Date ouvrable, Heures, Coordinateurs
+    - NOUVEAU (depuis sept 2025): Libellé, Quantité, Prix, Montant
 
     Returns:
         DataFrame avec colonnes: Date, Heures_[CATEGORY], Cout_[CATEGORY], Heures_Total, Cout_Total
@@ -30,81 +26,20 @@ def load_facturation_data_for_year(year: int):
         st.error(f"Le répertoire de facturation n'existe pas: {factu_dir}")
         return pd.DataFrame()
 
-    # ==== CHARGER LES FICHIERS EXCEL ====
+    # Charger les fichiers Excel (ancien et nouveau format)
     excel_data = _load_excel_facturation(year, factu_dir)
 
-    # ==== CHARGER LES FICHIERS PDF ====
-    pdf_data = pd.DataFrame()
-    if PDF_AVAILABLE:
-        try:
-            pdf_data = load_pdf_facturation_data(factu_dir, year)
-
-            # Appliquer le mapping des catégories si nécessaire
-            if not pdf_data.empty:
-                pdf_data = _apply_pdf_category_mapping(pdf_data)
-        except Exception as e:
-            st.warning(f"Erreur lors du chargement des PDFs: {e}")
-
-    # ==== FUSIONNER EXCEL ET PDF ====
-    if excel_data.empty and pdf_data.empty:
+    if excel_data.empty:
         return pd.DataFrame()
-    elif excel_data.empty:
-        # Normaliser la colonne Date en datetime
-        if 'Date' in pdf_data.columns:
-            pdf_data['Date'] = pd.to_datetime(pdf_data['Date'])
-        return pdf_data
-    elif pdf_data.empty:
-        # Normaliser la colonne Date en datetime (devrait déjà l'être, mais par sécurité)
-        if 'Date' in excel_data.columns:
-            excel_data['Date'] = pd.to_datetime(excel_data['Date'])
-        return excel_data
-    else:
-        # Fusionner les deux sources
-        # Les Excel ont: Date, Heures, Heures_Coordinateurs, Heures_Total
-        # Les PDF ont: Date, Heures_CATEGORY, Cout_CATEGORY, Heures_Total, Cout_Total
 
-        # Normaliser les dates des deux sources
+    # Normaliser la colonne Date en datetime
+    if 'Date' in excel_data.columns:
         excel_data['Date'] = pd.to_datetime(excel_data['Date'], errors='coerce')
-        pdf_data['Date'] = pd.to_datetime(pdf_data['Date'], errors='coerce')
+        excel_data = excel_data.dropna(subset=['Date'])
+        excel_data = excel_data.sort_values('Date', na_position='last').reset_index(drop=True)
+        excel_data = excel_data.fillna(0)
 
-        # Extraire les mois présents dans chaque source
-        excel_months = set(excel_data['Date'].dropna().dt.to_period('M'))
-        pdf_months = set(pdf_data['Date'].dropna().dt.to_period('M'))
-
-        # Mois communs = potentiel de duplication
-        common_months = excel_months & pdf_months
-
-        if common_months:
-            st.warning(
-                f"⚠️ Données trouvées à la fois en Excel et PDF pour {len(common_months)} mois. "
-                f"Les données PDF (plus récentes) seront privilégiées."
-            )
-            # Filtrer Excel: ne garder que les mois absents des PDF
-            excel_data = excel_data[
-                ~excel_data['Date'].dt.to_period('M').isin(pdf_months)
-            ].copy()
-
-        # Harmoniser les colonnes Excel pour être compatibles avec PDF
-        if 'Heures' in excel_data.columns:
-            excel_data.rename(columns={'Heures': 'Heures_AT'}, inplace=True)
-        if 'Heures_Coordinateurs' in excel_data.columns:
-            excel_data.rename(columns={
-                'Heures_Coordinateurs': 'Heures_Coordinateur'
-            }, inplace=True)
-
-        # Concaténer (maintenant sans doublons)
-        result = pd.concat([excel_data, pdf_data], ignore_index=True)
-
-        # Supprimer les lignes avec Date invalide/NaN
-        result = result.dropna(subset=['Date'])
-
-        # Trier par date
-        result = result.sort_values('Date', na_position='last').reset_index(drop=True)
-
-        # Remplir les NaN avec 0 (pour les colonnes numériques)
-        result = result.fillna(0)
-
-        return result
+    return excel_data
 
 
 def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
@@ -369,59 +304,6 @@ def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) ->
     st.info(f"✓ {file_path.name} (nouveau format): {len(df)} lignes, {len(df['Type'].unique())} types")
 
     return result_df
-
-
-def _apply_pdf_category_mapping(pdf_df: pd.DataFrame) -> pd.DataFrame:
-    """Applique le mapping des catégories PDF vers les catégories de l'app"""
-    # Extraire les catégories PDF présentes dans les données
-    pdf_categories = []
-    for col in pdf_df.columns:
-        if col.startswith('Heures_') and col != 'Heures_Total':
-            cat = col.replace('Heures_', '')
-            pdf_categories.append(cat)
-
-    if not pdf_categories:
-        return pdf_df
-
-    # Récupérer le mapping depuis session_state
-    mapping = st.session_state.get('pdf_category_mapping', {})
-
-    # IMPORTANT: Les catégories de l'app sont les TYPES de Personnel (AT, ATR, Coordinateur, etc.)
-    # Pas les périmètres (qui sont les lieux/secteurs)
-    app_categories = []
-    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
-        app_categories = st.session_state.personnel['Type'].unique().tolist()
-
-    # Créer le mapping automatique pour toutes les catégories PDF
-    auto_mapping = get_category_mapping_for_pdf(pdf_categories, app_categories)
-
-    # Fusionner: garder le mapping manuel s'il existe, sinon utiliser l'auto
-    for pdf_cat in pdf_categories:
-        if pdf_cat not in mapping:
-            mapping[pdf_cat] = auto_mapping.get(pdf_cat)
-
-    # Mettre à jour session_state
-    st.session_state.pdf_category_mapping = mapping
-
-    # Vérifier s'il y a des catégories non mappées (None)
-    unmapped_categories = [cat for cat, app_cat in mapping.items() if app_cat is None and cat in pdf_categories]
-
-    if unmapped_categories:
-        st.warning(
-            f"⚠️ **{len(unmapped_categories)} catégories PDF non mappées:** {', '.join(unmapped_categories)}\n\n"
-            f"Ces catégories ne seront pas incluses dans l'analyse. "
-            f"Pour les mapper vers des catégories existantes, allez dans **Configuration → "
-            f"Bloc 4: Mapping des Catégories PDF**."
-        )
-
-        # Afficher les catégories disponibles pour info
-        if app_categories:
-            st.info(f"📋 Types de personnel disponibles: {', '.join(app_categories)}")
-
-    # Appliquer le mapping
-    result = apply_category_mapping(pdf_df, mapping)
-
-    return result
 
 
 def calculate_budget_modifie(year: int):
