@@ -9,95 +9,418 @@ import streamlit as st
 import altair as alt
 from config.constants import FACTU_AT_DIR, FACTU_AT_GLOB, TIME_SLOTS
 from core.planning import _ensure_grid, _apply_ops_to_grid
+from utils.pdf_parser import (
+    load_pdf_facturation_data,
+    get_category_mapping_for_pdf,
+    apply_category_mapping,
+    PDF_AVAILABLE
+)
 
 
 def load_facturation_data_for_year(year: int):
     """
     Charge et agrège tous les fichiers de facturation pour une année donnée.
-    
+    Supporte à la fois les fichiers Excel (.xlsx) et PDF (.pdf).
+
     Returns:
-        DataFrame avec colonnes: Date, Heures, Coordinateurs
+        DataFrame avec colonnes: Date, Heures_[CATEGORY], Cout_[CATEGORY], Heures_Total, Cout_Total
     """
     factu_dir = Path(FACTU_AT_DIR)
     if not factu_dir.exists():
         st.error(f"Le répertoire de facturation n'existe pas: {factu_dir}")
         return pd.DataFrame()
-    
-    # Pattern pour les fichiers de facturation avec année
+
+    # ==== CHARGER LES FICHIERS EXCEL ====
+    excel_data = _load_excel_facturation(year, factu_dir)
+
+    # ==== CHARGER LES FICHIERS PDF ====
+    pdf_data = pd.DataFrame()
+    if PDF_AVAILABLE:
+        try:
+            pdf_data = load_pdf_facturation_data(factu_dir, year)
+
+            # Appliquer le mapping des catégories si nécessaire
+            if not pdf_data.empty:
+                pdf_data = _apply_pdf_category_mapping(pdf_data)
+        except Exception as e:
+            st.warning(f"Erreur lors du chargement des PDFs: {e}")
+
+    # ==== FUSIONNER EXCEL ET PDF ====
+    if excel_data.empty and pdf_data.empty:
+        return pd.DataFrame()
+    elif excel_data.empty:
+        # Normaliser la colonne Date en datetime
+        if 'Date' in pdf_data.columns:
+            pdf_data['Date'] = pd.to_datetime(pdf_data['Date'])
+        return pdf_data
+    elif pdf_data.empty:
+        # Normaliser la colonne Date en datetime (devrait déjà l'être, mais par sécurité)
+        if 'Date' in excel_data.columns:
+            excel_data['Date'] = pd.to_datetime(excel_data['Date'])
+        return excel_data
+    else:
+        # Fusionner les deux sources
+        # Les Excel ont: Date, Heures, Heures_Coordinateurs, Heures_Total
+        # Les PDF ont: Date, Heures_CATEGORY, Cout_CATEGORY, Heures_Total, Cout_Total
+
+        # Normaliser les dates des deux sources
+        excel_data['Date'] = pd.to_datetime(excel_data['Date'], errors='coerce')
+        pdf_data['Date'] = pd.to_datetime(pdf_data['Date'], errors='coerce')
+
+        # Extraire les mois présents dans chaque source
+        excel_months = set(excel_data['Date'].dropna().dt.to_period('M'))
+        pdf_months = set(pdf_data['Date'].dropna().dt.to_period('M'))
+
+        # Mois communs = potentiel de duplication
+        common_months = excel_months & pdf_months
+
+        if common_months:
+            st.warning(
+                f"⚠️ Données trouvées à la fois en Excel et PDF pour {len(common_months)} mois. "
+                f"Les données PDF (plus récentes) seront privilégiées."
+            )
+            # Filtrer Excel: ne garder que les mois absents des PDF
+            excel_data = excel_data[
+                ~excel_data['Date'].dt.to_period('M').isin(pdf_months)
+            ].copy()
+
+        # Harmoniser les colonnes Excel pour être compatibles avec PDF
+        if 'Heures' in excel_data.columns:
+            excel_data.rename(columns={'Heures': 'Heures_AT'}, inplace=True)
+        if 'Heures_Coordinateurs' in excel_data.columns:
+            excel_data.rename(columns={
+                'Heures_Coordinateurs': 'Heures_Coordinateur'
+            }, inplace=True)
+
+        # Concaténer (maintenant sans doublons)
+        result = pd.concat([excel_data, pdf_data], ignore_index=True)
+
+        # Supprimer les lignes avec Date invalide/NaN
+        result = result.dropna(subset=['Date'])
+
+        # Trier par date
+        result = result.sort_values('Date', na_position='last').reset_index(drop=True)
+
+        # Remplir les NaN avec 0 (pour les colonnes numériques)
+        result = result.fillna(0)
+
+        return result
+
+
+def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
+    """
+    Charge les fichiers Excel de facturation pour une année donnée.
+    Supporte 2 formats:
+    - ANCIEN (avant sept 2025): Date ouvrable, Heures, Coordinateurs
+    - NOUVEAU (depuis sept 2025): Libellé, Quantité, Prix, Montant
+    """
     pattern = re.compile(r'Facturation Lot A (\d{2})\.(\d{4})\.xlsx')
-    
+
     all_data = []
-    
+
     for file_path in factu_dir.glob(FACTU_AT_GLOB):
         match = pattern.match(file_path.name)
         if match:
             month_str, year_str = match.groups()
+            file_month = int(month_str)
             file_year = int(year_str)
-            
+
             # Ne charger que les fichiers de l'année sélectionnée
             if file_year != year:
                 continue
-            
+
             try:
-                # Lire le fichier Excel sans header pour analyser la structure
+                # Lire le fichier Excel pour détecter le format
                 df_raw = pd.read_excel(file_path, header=None)
-                
-                # Trouver la ligne d'en-tête (qui contient "Date ouvrable", "Heures", etc.)
-                header_row = None
+
+                # Détecter le format (nouveau vs ancien)
+                has_libelle_col = False
+                has_date_ouvrable = False
+
                 for idx, row in df_raw.iterrows():
-                    if 'Date ouvrable' in str(row.values):
-                        header_row = idx
+                    row_str = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
+                    if 'libellé' in row_str and 'quantité' in row_str and 'prix' in row_str:
+                        has_libelle_col = True
                         break
-                
-                if header_row is None:
-                    st.warning(f"Structure non reconnue dans {file_path.name}")
-                    continue
-                
-                # Lire à partir de la ligne suivante avec les bonnes colonnes
-                df = pd.read_excel(file_path, header=header_row)
-                
-                # Vérifier les colonnes nécessaires
-                if 'Date ouvrable' not in df.columns or 'Heures' not in df.columns:
-                    st.warning(f"Colonnes manquantes dans {file_path.name}")
-                    continue
-                
-                # Filtrer les lignes valides (qui contiennent "Total")
-                df = df[df['Date ouvrable'].astype(str).str.contains('Total', na=False)].copy()
-                
-                # Extraire la date du format "Total DD.MM.YYYY"
-                df['Date_str'] = df['Date ouvrable'].astype(str).str.extract(r'(\d{2}\.\d{2}\.\d{4})')
-                df['Date'] = pd.to_datetime(df['Date_str'], format='%d.%m.%Y', errors='coerce')
-                
-                # Nettoyer les données
-                df = df.dropna(subset=['Date'])
-                df['Heures'] = pd.to_numeric(df['Heures'], errors='coerce').fillna(0)
-                
-                # Ajouter les heures de coordination si disponible
-                if 'Coordinateurs' in df.columns:
-                    df['Heures_Coordinateurs'] = pd.to_numeric(
-                        df['Coordinateurs'], errors='coerce'
-                    ).fillna(0)
+                    if 'date ouvrable' in row_str:
+                        has_date_ouvrable = True
+                        break
+
+                # Seuil: septembre 2025 = changement de format
+                is_new_format = (file_year > 2025) or (file_year == 2025 and file_month >= 9)
+
+                # Forcer la détection si les colonnes sont trouvées
+                if has_libelle_col:
+                    is_new_format = True
+                elif has_date_ouvrable:
+                    is_new_format = False
+
+                if is_new_format:
+                    # === NOUVEAU FORMAT (depuis sept 2025) ===
+                    df_result = _parse_new_excel_format(file_path, file_year, file_month)
                 else:
-                    df['Heures_Coordinateurs'] = 0
-                
-                # Calculer le total des heures (AT + Coordinateurs)
-                df['Heures_Total'] = df['Heures'] + df['Heures_Coordinateurs']
-                
-                # Sélectionner les colonnes finales
-                df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
-                all_data.append(df_clean)
-                
+                    # === ANCIEN FORMAT (avant sept 2025) ===
+                    df_result = _parse_old_excel_format(file_path, file_year, file_month)
+
+                if not df_result.empty:
+                    all_data.append(df_result)
+
             except Exception as e:
-                st.warning(f"Erreur lors du chargement de {file_path.name}: {e}")
+                st.warning(f"⚠️ Erreur lors du chargement de {file_path.name}: {e}")
+                import traceback
+                st.error(traceback.format_exc())
                 continue
-    
+
     if not all_data:
         return pd.DataFrame()
-    
+
     # Concaténer tous les mois
     result = pd.concat(all_data, ignore_index=True)
     result = result.sort_values('Date').reset_index(drop=True)
-    
+
+    return result
+
+
+def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) -> pd.DataFrame:
+    """
+    Parse l'ancien format Excel (avant sept 2025):
+    - Colonnes: Date ouvrable, Heures, Coordinateurs
+    """
+    # Lire le fichier Excel sans header pour analyser la structure
+    df_raw = pd.read_excel(file_path, header=None)
+
+    # Trouver la ligne d'en-tête (qui contient "Date ouvrable", "Heures", etc.)
+    header_row = None
+    for idx, row in df_raw.iterrows():
+        if 'Date ouvrable' in str(row.values):
+            header_row = idx
+            break
+
+    if header_row is None:
+        st.warning(f"⚠️ Structure ancien format non reconnue dans {file_path.name}")
+        return pd.DataFrame()
+
+    # Lire à partir de la ligne suivante avec les bonnes colonnes
+    df = pd.read_excel(file_path, header=header_row)
+
+    # Vérifier les colonnes nécessaires
+    if 'Date ouvrable' not in df.columns or 'Heures' not in df.columns:
+        st.warning(f"⚠️ Colonnes manquantes dans {file_path.name}")
+        return pd.DataFrame()
+
+    # Filtrer les lignes valides (qui contiennent "Total")
+    df = df[df['Date ouvrable'].astype(str).str.contains('Total', na=False)].copy()
+
+    # Extraire la date du format "Total DD.MM.YYYY"
+    df['Date_str'] = df['Date ouvrable'].astype(str).str.extract(r'(\d{2}\.\d{2}\.\d{4})')
+    df['Date'] = pd.to_datetime(df['Date_str'], format='%d.%m.%Y', errors='coerce')
+
+    # Nettoyer les données
+    df = df.dropna(subset=['Date'])
+    df['Heures'] = pd.to_numeric(df['Heures'], errors='coerce').fillna(0)
+
+    # Ajouter les heures de coordination si disponible
+    if 'Coordinateurs' in df.columns:
+        df['Heures_Coordinateurs'] = pd.to_numeric(
+            df['Coordinateurs'], errors='coerce'
+        ).fillna(0)
+    else:
+        df['Heures_Coordinateurs'] = 0
+
+    # Calculer le total des heures (AT + Coordinateurs)
+    df['Heures_Total'] = df['Heures'] + df['Heures_Coordinateurs']
+
+    # Sélectionner les colonnes finales
+    df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
+
+    return df_clean
+
+
+def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) -> pd.DataFrame:
+    """
+    Parse le nouveau format Excel (depuis sept 2025):
+    - Colonnes: Libellé, Quantité, Prix, Montant
+    - Libellé: "Heures AT", "Heures ATR", etc.
+    - Quantité: nombre d'heures
+    - Prix: coût horaire
+    - Montant: coût total (Quantité × Prix)
+    """
+    # Lire le fichier Excel sans header pour trouver les en-têtes
+    df_raw = pd.read_excel(file_path, header=None)
+
+    # Trouver la ligne d'en-tête
+    header_row = None
+    for idx, row in df_raw.iterrows():
+        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
+        if 'libellé' in row_str and 'quantité' in row_str:
+            header_row = idx
+            break
+
+    if header_row is None:
+        st.warning(f"⚠️ En-têtes nouveau format non trouvés dans {file_path.name}")
+        return pd.DataFrame()
+
+    # Lire avec les bonnes en-têtes
+    df = pd.read_excel(file_path, header=header_row)
+
+    # Normaliser les noms de colonnes
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # Vérifier les colonnes requises
+    required_cols = ['Libellé', 'Quantité', 'Prix', 'Montant']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+
+    if missing_cols:
+        st.warning(f"⚠️ Colonnes manquantes dans {file_path.name}: {missing_cols}")
+        return pd.DataFrame()
+
+    # Filtrer les lignes valides (avec libellé et quantité > 0)
+    df = df[df['Libellé'].notna() & (df['Libellé'] != '')].copy()
+    df['Quantité'] = pd.to_numeric(df['Quantité'], errors='coerce').fillna(0)
+    df['Prix'] = pd.to_numeric(df['Prix'], errors='coerce').fillna(0)
+    df['Montant'] = pd.to_numeric(df['Montant'], errors='coerce').fillna(0)
+
+    # Filtrer les lignes avec quantité > 0
+    df = df[df['Quantité'] > 0].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # Extraire le type de personnel depuis le libellé
+    def extract_type_personnel(libelle: str) -> str:
+        """Extrait le type de personnel depuis 'Heures AT', 'Heures ATR', etc."""
+        libelle = str(libelle).strip()
+
+        # Pattern: "Heures XXX" ou "Heure XXX"
+        match = re.search(r'(?:Heures?)\s+(.+)', libelle, re.IGNORECASE)
+        if match:
+            type_str = match.group(1).strip()
+        else:
+            # Fallback: prendre tout le libellé
+            type_str = libelle
+
+        # Normaliser
+        type_lower = type_str.lower()
+
+        # Mappings connus
+        if 'atf' in type_lower or 'formateur' in type_lower:
+            return 'ATF'
+        if 'atr' in type_lower:
+            return 'ATR'
+        if 'coordinateur' in type_lower:
+            return 'Coordinateurs'
+        if 'csc' in type_lower:
+            return 'CSC'
+        if "gestion d'accès" in type_lower or 'gestion acces' in type_lower:
+            return 'Gestion d\'accès'
+        if 'visitor' in type_lower:
+            return 'Visitor Center'
+        if re.search(r'\bat\b', type_lower):  # mot isolé "AT"
+            return 'AT'
+
+        # Types inconnus → catégorie "extra"
+        return 'extra'
+
+    df['Type'] = df['Libellé'].apply(extract_type_personnel)
+
+    # Vérifier les prix avec la configuration si disponible
+    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+        personnel_df = st.session_state.personnel
+
+        for _, row in df.iterrows():
+            type_pers = row['Type']
+            prix_facture = row['Prix']
+
+            # Chercher le coût horaire configuré
+            matching = personnel_df[personnel_df['Type'] == type_pers]
+            if not matching.empty:
+                cout_config = float(matching['Coût Horaire'].iloc[0])
+                # Tolérance de 1% pour comparaison
+                if abs(prix_facture - cout_config) > cout_config * 0.01:
+                    st.warning(
+                        f"⚠️ {file_path.name}: Prix facturé pour {type_pers} ({prix_facture:.2f} CHF/h) "
+                        f"diffère de la configuration ({cout_config:.2f} CHF/h)"
+                    )
+
+    # Créer une ligne par mois avec toutes les catégories
+    date = dt.date(file_year, file_month, 1)
+    row_data = {'Date': date}
+
+    total_heures = 0.0
+    total_cout = 0.0
+
+    # Grouper par type
+    for type_pers, group in df.groupby('Type'):
+        heures = group['Quantité'].sum()
+        cout = group['Montant'].sum()
+
+        row_data[f'Heures_{type_pers}'] = heures
+        row_data[f'Cout_{type_pers}'] = cout
+
+        total_heures += heures
+        total_cout += cout
+
+    row_data['Heures_Total'] = total_heures
+    row_data['Cout_Total'] = total_cout
+
+    # Créer le DataFrame final
+    result_df = pd.DataFrame([row_data])
+
+    st.info(f"✓ {file_path.name} (nouveau format): {len(df)} lignes, {len(df['Type'].unique())} types")
+
+    return result_df
+
+
+def _apply_pdf_category_mapping(pdf_df: pd.DataFrame) -> pd.DataFrame:
+    """Applique le mapping des catégories PDF vers les catégories de l'app"""
+    # Extraire les catégories PDF présentes dans les données
+    pdf_categories = []
+    for col in pdf_df.columns:
+        if col.startswith('Heures_') and col != 'Heures_Total':
+            cat = col.replace('Heures_', '')
+            pdf_categories.append(cat)
+
+    if not pdf_categories:
+        return pdf_df
+
+    # Récupérer le mapping depuis session_state
+    mapping = st.session_state.get('pdf_category_mapping', {})
+
+    # IMPORTANT: Les catégories de l'app sont les TYPES de Personnel (AT, ATR, Coordinateur, etc.)
+    # Pas les périmètres (qui sont les lieux/secteurs)
+    app_categories = []
+    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+        app_categories = st.session_state.personnel['Type'].unique().tolist()
+
+    # Créer le mapping automatique pour toutes les catégories PDF
+    auto_mapping = get_category_mapping_for_pdf(pdf_categories, app_categories)
+
+    # Fusionner: garder le mapping manuel s'il existe, sinon utiliser l'auto
+    for pdf_cat in pdf_categories:
+        if pdf_cat not in mapping:
+            mapping[pdf_cat] = auto_mapping.get(pdf_cat)
+
+    # Mettre à jour session_state
+    st.session_state.pdf_category_mapping = mapping
+
+    # Vérifier s'il y a des catégories non mappées (None)
+    unmapped_categories = [cat for cat, app_cat in mapping.items() if app_cat is None and cat in pdf_categories]
+
+    if unmapped_categories:
+        st.warning(
+            f"⚠️ **{len(unmapped_categories)} catégories PDF non mappées:** {', '.join(unmapped_categories)}\n\n"
+            f"Ces catégories ne seront pas incluses dans l'analyse. "
+            f"Pour les mapper vers des catégories existantes, allez dans **Configuration → "
+            f"Bloc 4: Mapping des Catégories PDF**."
+        )
+
+        # Afficher les catégories disponibles pour info
+        if app_categories:
+            st.info(f"📋 Types de personnel disponibles: {', '.join(app_categories)}")
+
+    # Appliquer le mapping
+    result = apply_category_mapping(pdf_df, mapping)
+
     return result
 
 
