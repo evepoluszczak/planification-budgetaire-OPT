@@ -9,14 +9,21 @@ import streamlit as st
 import altair as alt
 from config.constants import FACTU_AT_DIR, FACTU_AT_GLOB, TIME_SLOTS
 from core.planning import _ensure_grid, _apply_ops_to_grid
+from utils.pdf_parser import (
+    load_pdf_facturation_data,
+    get_category_mapping_for_pdf,
+    apply_category_mapping,
+    PDF_AVAILABLE
+)
 
 
 def load_facturation_data_for_year(year: int):
     """
     Charge et agrège tous les fichiers de facturation pour une année donnée.
-    
+    Supporte à la fois les fichiers Excel (.xlsx) et PDF (.pdf).
+
     Returns:
-        DataFrame avec colonnes: Date, Heures, Coordinateurs
+        DataFrame avec colonnes: Date, Heures_[CATEGORY], Cout_[CATEGORY], Heures_Total, Cout_Total
     """
     factu_dir = Path(FACTU_AT_DIR)
     if not factu_dir.exists():
@@ -108,20 +115,20 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
     - NOUVEAU (depuis sept 2025): Libellé, Quantité, Prix, Montant
     """
     pattern = re.compile(r'Facturation Lot A (\d{2})\.(\d{4})\.xlsx')
-    
+
     all_data = []
-    
+
     for file_path in factu_dir.glob(FACTU_AT_GLOB):
         match = pattern.match(file_path.name)
         if match:
             month_str, year_str = match.groups()
             file_month = int(month_str)
             file_year = int(year_str)
-            
+
             # Ne charger que les fichiers de l'année sélectionnée
             if file_year != year:
                 continue
-            
+
             try:
                 # Lire le fichier Excel pour détecter le format
                 df_raw = pd.read_excel(file_path, header=None)
@@ -163,10 +170,10 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
                 import traceback
                 st.error(traceback.format_exc())
                 continue
-    
+
     if not all_data:
         return pd.DataFrame()
-    
+
     # Concaténer tous les mois
     result = pd.concat(all_data, ignore_index=True)
     result = result.sort_values('Date').reset_index(drop=True)
