@@ -563,7 +563,7 @@ def render_analyse_budgetaire_page():
     ecart_cout_real_mod = cout_realise - cout_modifie
     ecart_cout_real_mod_pct = (ecart_cout_real_mod / cout_modifie * 100) if cout_modifie != 0 else 0
 
-    # --- KPI Coûts (couleurs fixées : Annuel bleu, Modifié orange, Réalisé rouge) ---
+    # --- KPI Coûts (Annuel bleu, Modifié orange, Réalisé rouge) ---
     st.markdown("---")
     st.subheader(f"📊 Synthèse {year} - Coûts (CHF)")
     c1, c2, c3 = st.columns(3)
@@ -610,7 +610,7 @@ def render_analyse_budgetaire_page():
                 unsafe_allow_html=True
             )
 
-    # --- KPI Heures (couleurs fixées : Annuel bleu, Modifié orange, Réalisé rouge) ---
+    # --- KPI Heures (Annuel bleu, Modifié orange, Réalisé rouge) ---
     st.markdown("---")
     st.subheader(f"⏱️ Synthèse {year} - Heures")
     c1, c2, c3 = st.columns(3)
@@ -873,51 +873,101 @@ def render_analyse_budgetaire_page():
                 monthly_combined['Heures_Realise_Cumul'] = None
                 monthly_combined['Cout_Realise_Cumul'] = None
 
-            df_heures_plot = pd.DataFrame({
-                'Mois': monthly_combined['Mois_dt'].tolist() * 3,
-                'Type': (['Budget Annuel']*len(monthly_combined) + ['Budget Modifié']*len(monthly_combined) + ['Réalisé']*len(monthly_combined)),
-                'Heures_Cumul': (monthly_combined['Heures_Annuel_Cumul'].tolist() + monthly_combined['Heures_Modifie_Cumul'].tolist() + monthly_combined['Heures_Realise_Cumul'].tolist())
-            })
-            df_cout_plot = pd.DataFrame({
-                'Mois': monthly_combined['Mois_dt'].tolist() * 3,
-                'Type': (['Budget Annuel']*len(monthly_combined) + ['Budget Modifié']*len(monthly_combined) + ['Réalisé']*len(monthly_combined)),
-                'Cout_Cumul': (monthly_combined['Cout_Annuel_Cumul'].tolist() + monthly_combined['Cout_Modifie_Cumul'].tolist() + monthly_combined['Cout_Realise_Cumul'].tolist())
-            })
-            df_heures_plot = df_heures_plot.dropna(subset=['Heures_Cumul'])
-            df_cout_plot = df_cout_plot.dropna(subset=['Cout_Cumul'])
-
+            # Préparer les datasets pour tracer
             color_domain = ['Budget Annuel', 'Budget Modifié', 'Réalisé']
             color_range = ['#0076aa', '#ffa500', '#dc143c']
+
+            # ---------- COÛTS CUMULÉS ----------
+            df_cout_plot = pd.DataFrame({
+                'Mois': monthly_combined['Mois_dt'].tolist() * 3,
+                'Type': (['Budget Annuel']*len(monthly_combined) +
+                         ['Budget Modifié']*len(monthly_combined) +
+                         ['Réalisé']*len(monthly_combined)),
+                'Cout_Cumul': (monthly_combined['Cout_Annuel_Cumul'].tolist() +
+                               monthly_combined['Cout_Modifie_Cumul'].tolist() +
+                               monthly_combined['Cout_Realise_Cumul'].tolist())
+            }).dropna(subset=['Cout_Cumul'])
+
+            df_cout_realise = df_cout_plot[df_cout_plot['Type'] == 'Réalisé'].copy()
+            df_cout_budgets = df_cout_plot[df_cout_plot['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
+
+            # Lignes pleines pour Réalisé
+            chart_cout_rl = alt.Chart(df_cout_realise).mark_line(point=True, strokeWidth=3).encode(
+                x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                y=alt.Y('Cout_Cumul:Q', title='Coût Cumulé (CHF)'),
+                color=alt.Color('Type:N',
+                    scale=alt.Scale(domain=color_domain, range=color_range),
+                    legend=alt.Legend(title='Type de Budget')),
+                tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                         alt.Tooltip('Type:N', title='Type'),
+                         alt.Tooltip('Cout_Cumul:Q', title='Coût Cumulé', format=',.0f')]
+            )
+
+            # Lignes dash pour budgets
+            chart_cout_bg = alt.Chart(df_cout_budgets).mark_line(point=True, strokeWidth=3).encode(
+                x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                y=alt.Y('Cout_Cumul:Q', title='Coût Cumulé (CHF)'),
+                color=alt.Color('Type:N',
+                    scale=alt.Scale(domain=color_domain, range=color_range),
+                    legend=alt.Legend(title='Type de Budget')),
+                strokeDash=alt.StrokeDash('Type:N',
+                    scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'], range=[[5,5], [10,5]]),
+                    legend=None),
+                tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                         alt.Tooltip('Type:N', title='Type'),
+                         alt.Tooltip('Cout_Cumul:Q', title='Coût Cumulé', format=',.0f')]
+            )
+
+            # ---------- HEURES CUMULÉES ----------
+            df_heures_plot = pd.DataFrame({
+                'Mois': monthly_combined['Mois_dt'].tolist() * 3,
+                'Type': (['Budget Annuel']*len(monthly_combined) +
+                         ['Budget Modifié']*len(monthly_combined) +
+                         ['Réalisé']*len(monthly_combined)),
+                'Heures_Cumul': (monthly_combined['Heures_Annuel_Cumul'].tolist() +
+                                 monthly_combined['Heures_Modifie_Cumul'].tolist() +
+                                 monthly_combined['Heures_Realise_Cumul'].tolist())
+            }).dropna(subset=['Heures_Cumul'])
+
+            df_heures_realise = df_heures_plot[df_heures_plot['Type'] == 'Réalisé'].copy()
+            df_heures_budgets = df_heures_plot[df_heures_plot['Type'].isin(['Budget Annuel', 'Budget Modifié'])].copy()
+
+            chart_heures_rl = alt.Chart(df_heures_realise).mark_line(point=True, strokeWidth=3).encode(
+                x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                y=alt.Y('Heures_Cumul:Q', title='Heures Cumulées'),
+                color=alt.Color('Type:N',
+                    scale=alt.Scale(domain=color_domain, range=color_range),
+                    legend=alt.Legend(title='Type de Budget')),
+                tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                         alt.Tooltip('Type:N', title='Type'),
+                         alt.Tooltip('Heures_Cumul:Q', title='Heures Cumulées', format=',.0f')]
+            )
+
+            chart_heures_bg = alt.Chart(df_heures_budgets).mark_line(point=True, strokeWidth=3).encode(
+                x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                y=alt.Y('Heures_Cumul:Q', title='Heures Cumulées'),
+                color=alt.Color('Type:N',
+                    scale=alt.Scale(domain=color_domain, range=color_range),
+                    legend=alt.Legend(title='Type de Budget')),
+                strokeDash=alt.StrokeDash('Type:N',
+                    scale=alt.Scale(domain=['Budget Annuel', 'Budget Modifié'], range=[[5,5], [10,5]]),
+                    legend=None),
+                tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                         alt.Tooltip('Type:N', title='Type'),
+                         alt.Tooltip('Heures_Cumul:Q', title='Heures Cumulées', format=',.0f')]
+            )
 
             tab_cout, tab_heures = st.tabs(["💰 Coûts Cumulés (CHF)", "⏱️ Heures Cumulées"])
             with tab_cout:
                 if not df_cout_plot.empty:
-                    chart_cout = alt.Chart(df_cout_plot).mark_line(point=True, strokeWidth=3).encode(
-                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
-                        y=alt.Y('Cout_Cumul:Q', title='Coût Cumulé (CHF)'),
-                        color=alt.Color('Type:N',
-                            scale=alt.Scale(domain=color_domain, range=color_range),
-                            legend=alt.Legend(title='Type de Budget')),
-                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
-                                 alt.Tooltip('Type:N', title='Type'),
-                                 alt.Tooltip('Cout_Cumul:Q', title='Coût Cumulé', format=',.0f')]
-                    ).properties(height=400).interactive()
-                    st.altair_chart(chart_cout, use_container_width=True)
+                    st.altair_chart((chart_cout_bg + chart_cout_rl).properties(height=400).interactive(),
+                                    use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des coûts.")
             with tab_heures:
                 if not df_heures_plot.empty:
-                    chart_heures = alt.Chart(df_heures_plot).mark_line(point=True, strokeWidth=3).encode(
-                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
-                        y=alt.Y('Heures_Cumul:Q', title='Heures Cumulées'),
-                        color=alt.Color('Type:N',
-                            scale=alt.Scale(domain=color_domain, range=color_range),
-                            legend=alt.Legend(title='Type de Budget')),
-                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
-                                 alt.Tooltip('Type:N', title='Type'),
-                                 alt.Tooltip('Heures_Cumul:Q', title='Heures Cumulées', format=',.0f')]
-                    ).properties(height=400).interactive()
-                    st.altair_chart(chart_heures, use_container_width=True)
+                    st.altair_chart((chart_heures_bg + chart_heures_rl).properties(height=400).interactive(),
+                                    use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des heures.")
         except Exception as e:
