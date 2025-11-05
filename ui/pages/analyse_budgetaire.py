@@ -670,59 +670,94 @@ def render_analyse_budgetaire_page():
             st.error(traceback.format_exc())
 
     # =================== Tableau Détaillé Mensuel ===================
+    # =================== Tableau Détaillé Mensuel ===================
+    
     st.markdown("---")
     st.subheader("📋 Détail Mensuel")
-
+    
     if not calendar_with_modif.empty and 'monthly_combined' in locals():
         try:
+            # Base : données Modifié
             monthly_table = monthly_combined.copy()
             monthly_table['Mois'] = monthly_table['Mois_str']
-            columns_to_show = {
-                'Mois': 'Mois',
-                'Heures_Annuel': 'Heures Annuel',
-                'Heures_Modifie': 'Heures Modifié',
-                'Cout_Annuel': 'Coût Annuel (CHF)',
-                'Cout_Modifie': 'Coût Modifié (CHF)'
-            }
-            if 'Heures_Total' in monthly_table.columns and not df_factu.empty:
-                monthly_factu_raw = df_factu.groupby('Mois').agg({'Heures_Total':'sum'}).reset_index()
+    
+            # Par défaut, on garde uniquement Modifié
+            monthly_table['Heures_Modifie'] = monthly_table.get('Heures_Modifie', 0).fillna(0)
+            monthly_table['Cout_Modifie'] = monthly_table.get('Cout_Modifie', 0).fillna(0)
+    
+            # Ajout des colonnes "Facturées" (si fichiers dispo)
+            if not df_factu.empty:
+                monthly_factu_raw = df_factu.groupby('Mois').agg({'Heures_Total': 'sum'}).reset_index()
                 monthly_factu_raw['Mois_str'] = monthly_factu_raw['Mois'].astype(str)
+    
+                # Tarif AT pour valoriser le coût facturé
                 tarif_at = 0.0
-                t_at = st.session_state.get('cost_mapping', {}).get("AT")
-                if t_at:
-                    pers = st.session_state.get('personnel', pd.DataFrame())
-                    if not pers.empty:
-                        r = pers[pers['Type'] == t_at]
-                        if not r.empty:
-                            tarif_at = float(r['Coût Horaire'].iloc[0])
-                monthly_factu_raw['Cout_Realise'] = monthly_factu_raw['Heures_Total'] * tarif_at
+                personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
+                if personnel_type_at:
+                    personnel_df = st.session_state.get('personnel', pd.DataFrame())
+                    if not personnel_df.empty:
+                        row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
+                        if not row_tarif.empty:
+                            tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
+    
+                monthly_factu_raw['Cout_Facture'] = monthly_factu_raw['Heures_Total'] * tarif_at
+    
+                # Merge sur le mois
                 monthly_table = monthly_table.merge(
-                    monthly_factu_raw[['Mois_str','Heures_Total','Cout_Realise']],
-                    left_on='Mois', right_on='Mois_str', how='left'
-                )
-                columns_to_show['Heures_Total'] = 'Heures Réalisé'
-                columns_to_show['Cout_Realise'] = 'Coût Réalisé (CHF)'
-
-            df_monthly_display = monthly_table[list(columns_to_show.keys())].copy()
-            df_monthly_display.columns = list(columns_to_show.values())
-
+                    monthly_factu_raw[['Mois_str', 'Heures_Total', 'Cout_Facture']],
+                    left_on='Mois',
+                    right_on='Mois_str',
+                    how='left'
+                ).drop(columns=['Mois_str'])
+    
+                # Renommer pour l'affichage
+                monthly_table.rename(columns={
+                    'Heures_Total': 'Heures_Facturees'
+                }, inplace=True)
+            else:
+                # Colonnes vides si pas de factures
+                monthly_table['Heures_Facturees'] = pd.NA
+                monthly_table['Cout_Facture'] = pd.NA
+    
+            # Colonnes finales à afficher (sans Annuel)
+            columns_to_show = [
+                'Mois',
+                'Heures_Modifie',
+                'Cout_Modifie',
+                'Heures_Facturees',
+                'Cout_Facture'
+            ]
+    
+            df_monthly_display = monthly_table[columns_to_show].copy()
+            df_monthly_display.columns = [
+                'Mois',
+                'Heures Modifié',
+                'Coût Modifié (CHF)',
+                'Heures Facturées',
+                'Coût Facturé (CHF)'
+            ]
+    
+            # Configuration des colonnes
             col_config = {
                 'Mois': st.column_config.TextColumn('Mois'),
-                'Heures Annuel': st.column_config.NumberColumn('Heures Annuel', format='%.0f h'),
                 'Heures Modifié': st.column_config.NumberColumn('Heures Modifié', format='%.0f h'),
-                'Coût Annuel (CHF)': st.column_config.NumberColumn('Coût Annuel', format='%.0f CHF'),
-                'Coût Modifié (CHF)': st.column_config.NumberColumn('Coût Modifié', format='%.0f CHF')
+                'Coût Modifié (CHF)': st.column_config.NumberColumn('Coût Modifié', format='%.0f CHF'),
+                'Heures Facturées': st.column_config.NumberColumn('Heures Facturées', format='%.0f h'),
+                'Coût Facturé (CHF)': st.column_config.NumberColumn('Coût Facturé', format='%.0f CHF'),
             }
-            if 'Heures Réalisé' in df_monthly_display.columns:
-                col_config['Heures Réalisé'] = st.column_config.NumberColumn('Heures Réalisé', format='%.0f h')
-                col_config['Coût Réalisé (CHF)'] = st.column_config.NumberColumn('Coût Réalisé', format='%.0f CHF')
-
-            st.dataframe(df_monthly_display, column_config=col_config, hide_index=True, use_container_width=True)
-
+    
+            st.dataframe(
+                df_monthly_display,
+                column_config=col_config,
+                hide_index=True,
+                use_container_width=True
+            )
+    
         except Exception as e:
             st.error(f"Erreur lors de la création du tableau mensuel: {e}")
             import traceback
             st.error(traceback.format_exc())
+
 
     # =================== Notes ===================
     with st.expander("ℹ️ Informations sur l'Analyse Budgétaire"):
