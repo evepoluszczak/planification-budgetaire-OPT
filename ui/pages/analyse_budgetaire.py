@@ -1,15 +1,24 @@
+# ui/pages/analyse_budgetaire.py
 """
 Page Analyse Budgétaire - Comparaison Budget Annuel vs Modifié vs Réalisé
 """
+from __future__ import annotations
+
 import datetime as dt
+import calendar
 from pathlib import Path
 import re
 import pandas as pd
 import streamlit as st
 import altair as alt
+
 from config.constants import FACTU_AT_DIR, FACTU_AT_GLOB, TIME_SLOTS
 from core.planning import _ensure_grid, _apply_ops_to_grid
 
+
+# ============================================================
+# Chargement & Parsing Facturation (année complète)
+# ============================================================
 
 def load_facturation_data_for_year(year: int):
     """
@@ -72,7 +81,7 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
                 has_libelle_col = False
                 has_date_ouvrable = False
 
-                for idx, row in df_raw.iterrows():
+                for _, row in df_raw.iterrows():
                     row_str = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
                     if 'libellé' in row_str and 'quantité' in row_str and 'prix' in row_str:
                         has_libelle_col = True
@@ -121,6 +130,10 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
 
     return result
 
+
+# ============================================================
+# Parseurs : Ancien & Nouveau formats (utilisés aussi par la vue mensuelle)
+# ============================================================
 
 def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) -> pd.DataFrame:
     """
@@ -174,7 +187,7 @@ def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) ->
     # Sélectionner les colonnes finales
     df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
 
-    # Afficher un expander cliquable avec les détails de la facture
+    # Expander informatif (vue détaillée)
     total_heures_at = df_clean['Heures'].sum()
     total_heures_coord = df_clean['Heures_Coordinateurs'].sum()
     total_heures = df_clean['Heures_Total'].sum()
@@ -183,7 +196,7 @@ def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) ->
         st.caption(f"**Mois**: {file_month:02d}/{file_year}")
         st.caption(f"**Total**: {total_heures:,.0f} heures")
 
-        # Créer un tableau détaillé par type
+        # Tableau par type (info)
         detail_rows = []
         if total_heures_at > 0:
             detail_rows.append({
@@ -200,7 +213,6 @@ def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) ->
 
         if detail_rows:
             df_detail = pd.DataFrame(detail_rows)
-
             st.dataframe(
                 df_detail,
                 column_config={
@@ -278,7 +290,6 @@ def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) ->
             # Fallback: prendre tout le libellé
             type_str = libelle
 
-        # Normaliser
         type_lower = type_str.lower()
 
         # Mappings connus
@@ -345,12 +356,12 @@ def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) ->
     # Créer le DataFrame final
     result_df = pd.DataFrame([row_data])
 
-    # Afficher un expander cliquable avec les détails de la facture
+    # Expander informatif (vue détaillée)
     with st.expander(f"✓ {file_path.name} (nouveau format): {len(df)} lignes, {len(df['Type'].unique())} types"):
         st.caption(f"**Mois**: {file_month:02d}/{file_year}")
         st.caption(f"**Total**: {total_heures:,.0f} heures · {total_cout:,.2f} CHF")
 
-        # Créer un tableau détaillé par type
+        # Tableau détaillé par type
         detail_rows = []
         for type_pers, group in df.groupby('Type'):
             detail_rows.append({
@@ -361,9 +372,7 @@ def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) ->
                 'Lignes': len(group)
             })
 
-        df_detail = pd.DataFrame(detail_rows)
-        df_detail = df_detail.sort_values('Heures', ascending=False)
-
+        df_detail = pd.DataFrame(detail_rows).sort_values('Heures', ascending=False)
         st.dataframe(
             df_detail,
             column_config={
@@ -380,6 +389,10 @@ def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) ->
     return result_df
 
 
+# ============================================================
+# Budget Modifié : recalcul identique à besoin_jour.py
+# ============================================================
+
 def calculate_budget_modifie(year: int):
     """
     Calcule le budget modifié pour l'année (Budget Annuel + ajustements Besoin Jour).
@@ -394,10 +407,10 @@ def calculate_budget_modifie(year: int):
         return None
 
     try:
-        # EXACTEMENT comme dans besoin_jour.py ligne 55
+        # EXACTEMENT comme dans besoin_jour.py
         calendar_dyn = bs['calendar_df'].copy()
 
-        # Récupérer le tarif AT (même logique que besoin_jour.py lignes 58-65)
+        # Tarif AT (même logique)
         tarif_at = 0.0
         personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
         if personnel_type_at:
@@ -407,7 +420,7 @@ def calculate_budget_modifie(year: int):
                 if not row_tarif.empty:
                     tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
 
-        # Préparer les données AT (même logique que besoin_jour.py lignes 67-69)
+        # Préparer les données AT (même logique)
         perimetres_AT = st.session_state.perimetres.get("AT", [])
         time_slots_default = TIME_SLOTS
         planning_dict_at = st.session_state.planning_data.get("AT", {})
@@ -415,7 +428,7 @@ def calculate_budget_modifie(year: int):
         heures_vals_at_recalc = []
         costs_vals_at_recalc = []
 
-        # Recalculer AT avec les ajustements (EXACTEMENT comme besoin_jour.py lignes 71-82)
+        # Recalculer AT avec ajustements (même logique)
         for _, r in calendar_dyn.iterrows():
             jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
             jtg = r['Jour_Type_Global']
@@ -433,24 +446,18 @@ def calculate_budget_modifie(year: int):
             heures_vals_at_recalc.append(day_hours)
             costs_vals_at_recalc.append(day_hours * tarif_at)
 
-        # Remplacer DIRECTEMENT les colonnes AT (comme besoin_jour.py lignes 84-85)
+        # Remplacer DIRECTEMENT les colonnes AT
         calendar_dyn["Heures_AT"] = heures_vals_at_recalc
         calendar_dyn["Coût_AT"] = costs_vals_at_recalc
 
-        # Recalculer les totaux (EXACTEMENT comme besoin_jour.py lignes 87-97)
-        heure_cols_categories = [c for c in calendar_dyn.columns
-                                if c.startswith('Heures_') and c != 'Heures_Total_Jour']
-        cout_cols_categories = [c for c in calendar_dyn.columns
-                               if c.startswith('Coût_') and c != 'Coût_Total_Jour']
+        # Recalculer les totaux
+        heure_cols_categories = [c for c in calendar_dyn.columns if c.startswith('Heures_') and c != 'Heures_Total_Jour']
+        cout_cols_categories = [c for c in calendar_dyn.columns if c.startswith('Coût_') and c != 'Coût_Total_Jour']
 
-        calendar_dyn['Heures_Total_Jour'] = calendar_dyn[heure_cols_categories].sum(
-            axis=1
-        ) if heure_cols_categories else 0.0
-        calendar_dyn['Coût_Total_Jour'] = calendar_dyn[cout_cols_categories].sum(
-            axis=1
-        ) if cout_cols_categories else 0.0
+        calendar_dyn['Heures_Total_Jour'] = calendar_dyn[heure_cols_categories].sum(axis=1) if heure_cols_categories else 0.0
+        calendar_dyn['Coût_Total_Jour'] = calendar_dyn[cout_cols_categories].sum(axis=1) if cout_cols_categories else 0.0
 
-        # Calculer les totaux annuels (comme besoin_jour.py lignes 99-100)
+        # Totaux annuels
         cur_hours_recalc = calendar_dyn['Heures_Total_Jour'].sum()
         cur_cost_recalc = calendar_dyn['Coût_Total_Jour'].sum()
 
@@ -467,6 +474,116 @@ def calculate_budget_modifie(year: int):
         return None
 
 
+# ============================================================
+# Helpers d'affichage / formatage
+# ============================================================
+
+def _fmt_chf(x) -> str:
+    if x is None or pd.isna(x):
+        return "—"
+    try:
+        return f"{float(x):,.2f} CHF".replace(",", " ")
+    except Exception:
+        return str(x)
+
+def _fmt_float(x) -> str:
+    if x is None or pd.isna(x):
+        return "—"
+    try:
+        return f"{float(x):,.2f}".replace(",", " ")
+    except Exception:
+        return str(x)
+
+def _month_selector(label: str, default_month: int) -> int:
+    months = list(range(1, 13))
+    month_names = [f"{m:02d} - {calendar.month_name[m]}" for m in months]
+    idx = months.index(default_month if default_month in months else dt.date.today().month)
+    pick = st.selectbox(label, options=list(zip(months, month_names)), index=idx, format_func=lambda t: t[1])
+    return pick[0]
+
+
+# ============================================================
+# Viewer d'UNE facture mensuelle (sans impact sur le reste)
+# ============================================================
+
+def _detect_invoice_format(file_path: Path) -> str:
+    """
+    Détecte le format pour un fichier mensuel donné.
+    Retourne "new" (Libellé/Quantité/Prix/Montant), "old" (Date ouvrable/Heures) ou "none".
+    """
+    if not file_path.exists():
+        return "none"
+
+    try:
+        df_raw = pd.read_excel(file_path, header=None, nrows=20)
+    except Exception:
+        return "none"
+
+    has_libelle_col = False
+    has_date_ouvrable = False
+
+    for _, row in df_raw.iterrows():
+        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
+        if 'libellé' in row_str and 'quantité' in row_str and 'prix' in row_str:
+            has_libelle_col = True
+            break
+        if 'date ouvrable' in row_str:
+            has_date_ouvrable = True
+            break
+
+    if has_libelle_col:
+        return "new"
+    if has_date_ouvrable:
+        return "old"
+    return "none"
+
+
+def _view_single_invoice(year: int, month: int, factu_dir: Path):
+    """
+    Visualisation d'UNE facture mensuelle choisie par l'utilisateur.
+    ⚠️ Cette fonction n'altère aucune variable globale de la page
+       (n'impacte pas les calculs / graphes).
+    """
+    file_path = factu_dir / f"Facturation Lot A {month:02d}.{year}.xlsx"
+    if not file_path.exists():
+        st.info(f"Aucune facture trouvée pour {month:02d}/{year} ({file_path.name}).")
+        return
+
+    fmt = _detect_invoice_format(file_path)
+    if fmt == "none":
+        st.warning(f"Format non reconnu pour {file_path.name}.")
+        return
+
+    # Réutilise les parseurs existants (affichent aussi un expander de détail)
+    if fmt == "new":
+        df_one = _parse_new_excel_format(file_path, year, month)
+        if df_one.empty:
+            st.info("Le fichier ne contient aucune ligne exploitable (nouveau format).")
+            return
+        st.caption("Format: **Nouveau** (Libellé / Quantité / Prix / Montant)")
+        st.dataframe(df_one, use_container_width=True, hide_index=True)
+        # KPI mois (issus du parseur)
+        heures_total = float(df_one.get('Heures_Total', 0) or 0)
+        cout_total = float(df_one.get('Cout_Total', 0) or 0)
+        c1, c2 = st.columns(2)
+        c1.metric("Heures (mois)", f"{heures_total:,.1f}".replace(",", " ") + " h")
+        c2.metric("Coût (mois)", f"{cout_total:,.2f}".replace(",", " ") + " CHF")
+
+    elif fmt == "old":
+        df_one = _parse_old_excel_format(file_path, year, month)
+        if df_one.empty:
+            st.info("Le fichier ne contient aucune ligne exploitable (ancien format).")
+            return
+        st.caption("Format: **Ancien** (Date ouvrable / Heures)")
+        st.dataframe(df_one, use_container_width=True, hide_index=True)
+        heures_total = float(df_one['Heures_Total'].sum() if 'Heures_Total' in df_one.columns else df_one['Heures'].sum())
+        st.metric("Heures (mois)", f"{heures_total:,.1f}".replace(",", " ") + " h")
+
+
+# ============================================================
+# PAGE PRINCIPALE
+# ============================================================
+
 def render_analyse_budgetaire_page():
     """Affiche la page d'Analyse Budgétaire"""
     st.title("Analyse Budgétaire")
@@ -475,11 +592,11 @@ def render_analyse_budgetaire_page():
         "le **Budget Modifié** (après ajustements Besoin Jour) et "
         "le **Réalisé** (facturation effective)."
     )
-    
+
     # Sélection de l'année
     bs = st.session_state.get('budget_state', {})
     default_year = bs.get('year', dt.date.today().year)
-    
+
     year = st.number_input(
         "Année d'analyse :",
         value=default_year,
@@ -487,7 +604,21 @@ def render_analyse_budgetaire_page():
         max_value=2050,
         key="analyse_budget_year"
     )
-    
+
+    # === Filtre optionnel de visualisation d'une facture mensuelle (sans impact) ===
+    with st.expander("🔎 Visualiser une facture mensuelle (optionnel, n'affecte pas les calculs)"):
+        col_m1, col_m2 = st.columns([2, 1])
+        with col_m1:
+            month_view = st.selectbox(
+                "Mois à afficher",
+                options=list(range(1, 13)),
+                format_func=lambda m: f"{m:02d} - {calendar.month_name[m]}",
+                key="ab_invoice_view_month",
+            )
+        with col_m2:
+            if st.button("Afficher la facture", key="ab_invoice_view_btn"):
+                _view_single_invoice(int(year), int(month_view), Path(FACTU_AT_DIR))
+
     # Vérifier que le budget existe pour cette année
     if not bs or bs.get('year') != year:
         st.warning(
@@ -495,39 +626,39 @@ def render_analyse_budgetaire_page():
             f"Veuillez d'abord générer le budget dans la page **Budget Annuel**."
         )
         st.stop()
-    
+
     # =================== Chargement des données ===================
-    
+
     with st.spinner("Chargement des données de facturation..."):
         df_factu = load_facturation_data_for_year(year)
-    
+
     with st.spinner("Calcul du budget modifié avec ajustements..."):
         budget_modifie = calculate_budget_modifie(year)
-    
+
     if budget_modifie is None:
         st.error("Impossible de calculer le budget modifié.")
         st.stop()
-    
+
     # =================== Extraction des données Budget Annuel ===================
-    
+
     calendar_df = bs.get('calendar_df', pd.DataFrame())
     totals_annuel = bs.get('totals', {})
     heures_annuel = totals_annuel.get('heures_annuel', 0.0)
     cout_annuel = totals_annuel.get('cout_annuel', 0.0)
-    
+
     # =================== Extraction des données Budget Modifié ===================
-    
+
     heures_modifie = budget_modifie.get('heures_total', 0.0)
     cout_modifie = budget_modifie.get('cout_total', 0.0)
-    
+
     # =================== Extraction des données Réalisé ===================
-    
+
     heures_realise = 0.0
     cout_realise = 0.0
-    
+
     if not df_factu.empty:
         heures_realise = df_factu['Heures_Total'].sum()
-        
+
         # Calculer le coût réalisé en utilisant le tarif AT
         tarif_at = 0.0
         personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
@@ -537,30 +668,30 @@ def render_analyse_budgetaire_page():
                 row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
                 if not row_tarif.empty:
                     tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
-        
+
         cout_realise = heures_realise * tarif_at
-    
+
     # =================== Calcul des écarts ===================
-    
+
     # Écarts Modifié vs Annuel
     ecart_heures_mod_ann = heures_modifie - heures_annuel
     ecart_heures_mod_ann_pct = (ecart_heures_mod_ann / heures_annuel * 100) if heures_annuel != 0 else 0
     ecart_cout_mod_ann = cout_modifie - cout_annuel
     ecart_cout_mod_ann_pct = (ecart_cout_mod_ann / cout_annuel * 100) if cout_annuel != 0 else 0
-    
+
     # Écarts Réalisé vs Modifié
     ecart_heures_real_mod = heures_realise - heures_modifie
     ecart_heures_real_mod_pct = (ecart_heures_real_mod / heures_modifie * 100) if heures_modifie != 0 else 0
     ecart_cout_real_mod = cout_realise - cout_modifie
     ecart_cout_real_mod_pct = (ecart_cout_real_mod / cout_modifie * 100) if cout_modifie != 0 else 0
-    
+
     # =================== Affichage : Synthèse CHF ===================
-    
+
     st.markdown("---")
     st.subheader(f"📊 Synthèse {year} - Coûts (CHF)")
-    
+
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         st.markdown(
             f"""<div class="kpi-card kpi-blue">
@@ -570,7 +701,7 @@ def render_analyse_budgetaire_page():
             </div>""",
             unsafe_allow_html=True
         )
-    
+
     with col2:
         ecart_color = "kpi-green" if ecart_cout_mod_ann <= 0 else "kpi-amber"
         ecart_symbol = "▼" if ecart_cout_mod_ann < 0 else "▲"
@@ -582,11 +713,11 @@ def render_analyse_budgetaire_page():
             </div>""",
             unsafe_allow_html=True
         )
-    
+
     with col3:
         ecart_color_real = "kpi-green" if ecart_cout_real_mod <= 0 else "kpi-red"
         ecart_symbol_real = "▼" if ecart_cout_real_mod < 0 else "▲"
-        
+
         if df_factu.empty:
             st.markdown(
                 f"""<div class="kpi-card kpi-amber">
@@ -605,14 +736,14 @@ def render_analyse_budgetaire_page():
                 </div>""",
                 unsafe_allow_html=True
             )
-    
+
     # =================== Affichage : Synthèse Heures ===================
-    
+
     st.markdown("---")
     st.subheader(f"⏱️ Synthèse {year} - Heures")
-    
+
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         st.markdown(
             f"""<div class="kpi-card kpi-blue">
@@ -622,7 +753,7 @@ def render_analyse_budgetaire_page():
             </div>""",
             unsafe_allow_html=True
         )
-    
+
     with col2:
         ecart_color = "kpi-green" if ecart_heures_mod_ann <= 0 else "kpi-amber"
         ecart_symbol = "▼" if ecart_heures_mod_ann < 0 else "▲"
@@ -634,11 +765,11 @@ def render_analyse_budgetaire_page():
             </div>""",
             unsafe_allow_html=True
         )
-    
+
     with col3:
         ecart_color_real = "kpi-green" if ecart_heures_real_mod <= 0 else "kpi-red"
         ecart_symbol_real = "▼" if ecart_heures_real_mod < 0 else "▲"
-        
+
         if df_factu.empty:
             st.markdown(
                 f"""<div class="kpi-card kpi-amber">
@@ -657,15 +788,15 @@ def render_analyse_budgetaire_page():
                 </div>""",
                 unsafe_allow_html=True
             )
-    
+
     # =================== Affichage : Courbes Cumulées ===================
-    
+
     st.markdown("---")
     st.subheader(f"📈 Évolution Cumulée {year}")
-    
+
     # Préparer les données mensuelles
     calendar_with_modif = budget_modifie.get('calendar_df', pd.DataFrame())
-    
+
     if not calendar_with_modif.empty:
         try:
             # S'assurer que Date est au bon format
@@ -688,8 +819,6 @@ def render_analyse_budgetaire_page():
             }, inplace=True)
 
             # Agréger par mois - Budget Modifié (avec ajustements)
-            # IMPORTANT: calendar_with_modif contient les valeurs modifiées dans
-            # Heures_Total_Jour et Coût_Total_Jour (après recalcul avec ajustements)
             monthly_modifie = calendar_with_modif.groupby('Mois').agg({
                 'Heures_Total_Jour': 'sum',
                 'Coût_Total_Jour': 'sum'
@@ -710,7 +839,7 @@ def render_analyse_budgetaire_page():
             monthly_budget['Cout_Annuel_Cumul'] = monthly_budget['Cout_Annuel'].cumsum()
             monthly_budget['Heures_Modifie_Cumul'] = monthly_budget['Heures_Modifie'].cumsum()
             monthly_budget['Cout_Modifie_Cumul'] = monthly_budget['Cout_Modifie'].cumsum()
-            
+
             # Agréger les données de facturation par mois si disponibles
             if not df_factu.empty:
                 df_factu['Mois'] = pd.to_datetime(df_factu['Date']).dt.to_period('M')
@@ -720,7 +849,7 @@ def render_analyse_budgetaire_page():
                 monthly_factu['Mois_str'] = monthly_factu['Mois'].astype(str)
                 monthly_factu['Mois_dt'] = monthly_factu['Mois'].apply(lambda x: x.to_timestamp())
                 monthly_factu['Heures_Realise_Cumul'] = monthly_factu['Heures_Total'].cumsum()
-                
+
                 # Calculer le coût réalisé cumulé
                 tarif_at = 0.0
                 personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
@@ -730,10 +859,10 @@ def render_analyse_budgetaire_page():
                         row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
                         if not row_tarif.empty:
                             tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
-                
+
                 monthly_factu['Cout_Realise'] = monthly_factu['Heures_Total'] * tarif_at
                 monthly_factu['Cout_Realise_Cumul'] = monthly_factu['Cout_Realise'].cumsum()
-                
+
                 # Fusionner les données
                 monthly_combined = monthly_budget.merge(
                     monthly_factu[['Mois_str', 'Heures_Realise_Cumul', 'Cout_Realise_Cumul']],
@@ -744,9 +873,9 @@ def render_analyse_budgetaire_page():
                 monthly_combined = monthly_budget.copy()
                 monthly_combined['Heures_Realise_Cumul'] = None
                 monthly_combined['Cout_Realise_Cumul'] = None
-            
+
             # Préparer les données pour Altair (format long)
-            # Pour les Heures
+            # Heures
             df_heures_plot = pd.DataFrame({
                 'Mois': monthly_combined['Mois_dt'].tolist() * 3,
                 'Type': (
@@ -760,8 +889,8 @@ def render_analyse_budgetaire_page():
                     monthly_combined['Heures_Realise_Cumul'].tolist()
                 )
             })
-            
-            # Pour les Coûts
+
+            # Coûts
             df_cout_plot = pd.DataFrame({
                 'Mois': monthly_combined['Mois_dt'].tolist() * 3,
                 'Type': (
@@ -775,14 +904,14 @@ def render_analyse_budgetaire_page():
                     monthly_combined['Cout_Realise_Cumul'].tolist()
                 )
             })
-            
+
             # Supprimer les lignes avec NaN pour le Réalisé
             df_heures_plot = df_heures_plot.dropna(subset=['Heures_Cumul'])
             df_cout_plot = df_cout_plot.dropna(subset=['Cout_Cumul'])
-            
-            # Créer les graphiques
+
+            # Graphiques
             tab_cout, tab_heures = st.tabs(["💰 Coûts Cumulés (CHF)", "⏱️ Heures Cumulées"])
-            
+
             with tab_cout:
                 if not df_cout_plot.empty:
                     chart_cout = alt.Chart(df_cout_plot).mark_line(
@@ -806,11 +935,11 @@ def render_analyse_budgetaire_page():
                     ).properties(
                         height=400
                     ).interactive()
-                    
+
                     st.altair_chart(chart_cout, use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des coûts.")
-            
+
             with tab_heures:
                 if not df_heures_plot.empty:
                     chart_heures = alt.Chart(df_heures_plot).mark_line(
@@ -834,28 +963,28 @@ def render_analyse_budgetaire_page():
                     ).properties(
                         height=400
                     ).interactive()
-                    
+
                     st.altair_chart(chart_heures, use_container_width=True)
                 else:
                     st.info("Pas de données disponibles pour tracer la courbe des heures.")
-            
+
         except Exception as e:
             st.error(f"Erreur lors de la création des graphiques cumulés: {e}")
             import traceback
             st.error(traceback.format_exc())
-    
+
     # =================== Tableau Détaillé Mensuel ===================
-    
+
     st.markdown("---")
     st.subheader("📋 Détail Mensuel")
-    
+
     if not calendar_with_modif.empty and 'monthly_combined' in locals():
         try:
             # Préparer un tableau récapitulatif mensuel
             monthly_table = monthly_combined.copy()
             monthly_table['Mois'] = monthly_table['Mois_str']
-            
-            # Sélectionner et renommer les colonnes
+
+            # Colonnes standard
             columns_to_show = {
                 'Mois': 'Mois',
                 'Heures_Annuel': 'Heures Annuel',
@@ -863,15 +992,15 @@ def render_analyse_budgetaire_page():
                 'Cout_Annuel': 'Coût Annuel (CHF)',
                 'Cout_Modifie': 'Coût Modifié (CHF)'
             }
-            
+
+            # Si réalisé présent (heures) → calcule coût réalisé via tarif AT
             if 'Heures_Total' in monthly_table.columns:
-                # Recalculer depuis df_factu pour avoir les valeurs mensuelles (non cumulées)
                 if not df_factu.empty:
                     monthly_factu_raw = df_factu.groupby('Mois').agg({
                         'Heures_Total': 'sum'
                     }).reset_index()
                     monthly_factu_raw['Mois_str'] = monthly_factu_raw['Mois'].astype(str)
-                    
+
                     tarif_at = 0.0
                     personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
                     if personnel_type_at:
@@ -880,85 +1009,78 @@ def render_analyse_budgetaire_page():
                             row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
                             if not row_tarif.empty:
                                 tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
-                    
+
                     monthly_factu_raw['Cout_Realise'] = monthly_factu_raw['Heures_Total'] * tarif_at
-                    
+
                     monthly_table = monthly_table.merge(
                         monthly_factu_raw[['Mois_str', 'Heures_Total', 'Cout_Realise']],
                         left_on='Mois',
                         right_on='Mois_str',
                         how='left'
                     )
-                    
+
                     columns_to_show['Heures_Total'] = 'Heures Réalisé'
                     columns_to_show['Cout_Realise'] = 'Coût Réalisé (CHF)'
-            
-            # Créer le DataFrame final
+
+            # DataFrame final
             df_monthly_display = monthly_table[list(columns_to_show.keys())].copy()
             df_monthly_display.columns = list(columns_to_show.values())
-            
-            # Configuration des colonnes
+
+            # Config colonnes
             col_config = {
                 'Mois': st.column_config.TextColumn('Mois'),
-                'Heures Annuel': st.column_config.NumberColumn(
-                    'Heures Annuel', format='%.0f h'
-                ),
-                'Heures Modifié': st.column_config.NumberColumn(
-                    'Heures Modifié', format='%.0f h'
-                ),
-                'Coût Annuel (CHF)': st.column_config.NumberColumn(
-                    'Coût Annuel', format='%.0f CHF'
-                ),
-                'Coût Modifié (CHF)': st.column_config.NumberColumn(
-                    'Coût Modifié', format='%.0f CHF'
-                )
+                'Heures Annuel': st.column_config.NumberColumn('Heures Annuel', format='%.0f h'),
+                'Heures Modifié': st.column_config.NumberColumn('Heures Modifié', format='%.0f h'),
+                'Coût Annuel (CHF)': st.column_config.NumberColumn('Coût Annuel', format='%.0f CHF'),
+                'Coût Modifié (CHF)': st.column_config.NumberColumn('Coût Modifié', format='%.0f CHF')
             }
-            
+
             if 'Heures Réalisé' in df_monthly_display.columns:
-                col_config['Heures Réalisé'] = st.column_config.NumberColumn(
-                    'Heures Réalisé', format='%.0f h'
-                )
-                col_config['Coût Réalisé (CHF)'] = st.column_config.NumberColumn(
-                    'Coût Réalisé', format='%.0f CHF'
-                )
-            
+                col_config['Heures Réalisé'] = st.column_config.NumberColumn('Heures Réalisé', format='%.0f h')
+                col_config['Coût Réalisé (CHF)'] = st.column_config.NumberColumn('Coût Réalisé', format='%.0f CHF')
+
             st.dataframe(
                 df_monthly_display,
                 column_config=col_config,
                 hide_index=True,
                 use_container_width=True
             )
-            
+
         except Exception as e:
             st.error(f"Erreur lors de la création du tableau mensuel: {e}")
             import traceback
             st.error(traceback.format_exc())
-    
-    # =================== Notes et Informations ===================
-    
+
+    # =================== Notes & Informations ===================
+
     with st.expander("ℹ️ Informations sur l'Analyse Budgétaire"):
         st.markdown("""
         ### Définitions
-        
+
         - **Budget Annuel** : Budget prévisionnel initial basé sur les jours-types et le calendrier des saisons.
-        
+
         - **Budget Modifié** : Budget ajusté intégrant tous les ajustements ponctuels définis dans 
           la page "Besoin Jour" (événements, modifications temporaires, etc.).
-        
+
         - **Réalisé** : Heures et coûts effectifs basés sur les fichiers de facturation 
           (dossier `input_files/facturation/`).
-        
+
         ### Calcul des écarts
-        
+
         - **Modifié vs Annuel** : Mesure l'impact des ajustements ponctuels sur le budget initial.
-        
+
         - **Réalisé vs Modifié** : Mesure l'écart entre ce qui était prévu (après ajustements) 
           et ce qui a été effectivement réalisé.
-        
+
         ### Sources de données
-        
+
         - **Budget Annuel** : Généré dans la page "Budget Annuel"
         - **Ajustements** : Définis dans la page "Besoin Jour"
         - **Facturation** : Fichiers Excel dans `input_files/facturation/`
           (format: `Facturation Lot A MM.YYYY.xlsx`)
         """)
+
+
+# (Optionnel) Lancer cette page seule
+if __name__ == "__main__":
+    render_analyse_budgetaire_page()
