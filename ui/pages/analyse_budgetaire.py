@@ -108,7 +108,12 @@ def load_facturation_data_for_year(year: int):
 
 
 def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
-    """Charge les fichiers Excel de facturation pour une année donnée"""
+    """
+    Charge les fichiers Excel de facturation pour une année donnée.
+    Supporte 2 formats:
+    - ANCIEN (avant sept 2025): Date ouvrable, Heures, Coordinateurs
+    - NOUVEAU (depuis sept 2025): Libellé, Quantité, Prix, Montant
+    """
     pattern = re.compile(r'Facturation Lot A (\d{2})\.(\d{4})\.xlsx')
 
     all_data = []
@@ -117,6 +122,7 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
         match = pattern.match(file_path.name)
         if match:
             month_str, year_str = match.groups()
+            file_month = int(month_str)
             file_year = int(year_str)
 
             # Ne charger que les fichiers de l'année sélectionnée
@@ -124,56 +130,45 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
                 continue
 
             try:
-                # Lire le fichier Excel sans header pour analyser la structure
+                # Lire le fichier Excel pour détecter le format
                 df_raw = pd.read_excel(file_path, header=None)
 
-                # Trouver la ligne d'en-tête (qui contient "Date ouvrable", "Heures", etc.)
-                header_row = None
+                # Détecter le format (nouveau vs ancien)
+                has_libelle_col = False
+                has_date_ouvrable = False
+
                 for idx, row in df_raw.iterrows():
-                    if 'Date ouvrable' in str(row.values):
-                        header_row = idx
+                    row_str = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
+                    if 'libellé' in row_str and 'quantité' in row_str and 'prix' in row_str:
+                        has_libelle_col = True
+                        break
+                    if 'date ouvrable' in row_str:
+                        has_date_ouvrable = True
                         break
 
-                if header_row is None:
-                    st.warning(f"Structure non reconnue dans {file_path.name}")
-                    continue
+                # Seuil: septembre 2025 = changement de format
+                is_new_format = (file_year > 2025) or (file_year == 2025 and file_month >= 9)
 
-                # Lire à partir de la ligne suivante avec les bonnes colonnes
-                df = pd.read_excel(file_path, header=header_row)
+                # Forcer la détection si les colonnes sont trouvées
+                if has_libelle_col:
+                    is_new_format = True
+                elif has_date_ouvrable:
+                    is_new_format = False
 
-                # Vérifier les colonnes nécessaires
-                if 'Date ouvrable' not in df.columns or 'Heures' not in df.columns:
-                    st.warning(f"Colonnes manquantes dans {file_path.name}")
-                    continue
-
-                # Filtrer les lignes valides (qui contiennent "Total")
-                df = df[df['Date ouvrable'].astype(str).str.contains('Total', na=False)].copy()
-
-                # Extraire la date du format "Total DD.MM.YYYY"
-                df['Date_str'] = df['Date ouvrable'].astype(str).str.extract(r'(\d{2}\.\d{2}\.\d{4})')
-                df['Date'] = pd.to_datetime(df['Date_str'], format='%d.%m.%Y', errors='coerce')
-
-                # Nettoyer les données
-                df = df.dropna(subset=['Date'])
-                df['Heures'] = pd.to_numeric(df['Heures'], errors='coerce').fillna(0)
-
-                # Ajouter les heures de coordination si disponible
-                if 'Coordinateurs' in df.columns:
-                    df['Heures_Coordinateurs'] = pd.to_numeric(
-                        df['Coordinateurs'], errors='coerce'
-                    ).fillna(0)
+                if is_new_format:
+                    # === NOUVEAU FORMAT (depuis sept 2025) ===
+                    df_result = _parse_new_excel_format(file_path, file_year, file_month)
                 else:
-                    df['Heures_Coordinateurs'] = 0
+                    # === ANCIEN FORMAT (avant sept 2025) ===
+                    df_result = _parse_old_excel_format(file_path, file_year, file_month)
 
-                # Calculer le total des heures (AT + Coordinateurs)
-                df['Heures_Total'] = df['Heures'] + df['Heures_Coordinateurs']
-
-                # Sélectionner les colonnes finales
-                df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
-                all_data.append(df_clean)
+                if not df_result.empty:
+                    all_data.append(df_result)
 
             except Exception as e:
-                st.warning(f"Erreur lors du chargement de {file_path.name}: {e}")
+                st.warning(f"⚠️ Erreur lors du chargement de {file_path.name}: {e}")
+                import traceback
+                st.error(traceback.format_exc())
                 continue
 
     if not all_data:
@@ -184,6 +179,196 @@ def _load_excel_facturation(year: int, factu_dir: Path) -> pd.DataFrame:
     result = result.sort_values('Date').reset_index(drop=True)
 
     return result
+
+
+def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) -> pd.DataFrame:
+    """
+    Parse l'ancien format Excel (avant sept 2025):
+    - Colonnes: Date ouvrable, Heures, Coordinateurs
+    """
+    # Lire le fichier Excel sans header pour analyser la structure
+    df_raw = pd.read_excel(file_path, header=None)
+
+    # Trouver la ligne d'en-tête (qui contient "Date ouvrable", "Heures", etc.)
+    header_row = None
+    for idx, row in df_raw.iterrows():
+        if 'Date ouvrable' in str(row.values):
+            header_row = idx
+            break
+
+    if header_row is None:
+        st.warning(f"⚠️ Structure ancien format non reconnue dans {file_path.name}")
+        return pd.DataFrame()
+
+    # Lire à partir de la ligne suivante avec les bonnes colonnes
+    df = pd.read_excel(file_path, header=header_row)
+
+    # Vérifier les colonnes nécessaires
+    if 'Date ouvrable' not in df.columns or 'Heures' not in df.columns:
+        st.warning(f"⚠️ Colonnes manquantes dans {file_path.name}")
+        return pd.DataFrame()
+
+    # Filtrer les lignes valides (qui contiennent "Total")
+    df = df[df['Date ouvrable'].astype(str).str.contains('Total', na=False)].copy()
+
+    # Extraire la date du format "Total DD.MM.YYYY"
+    df['Date_str'] = df['Date ouvrable'].astype(str).str.extract(r'(\d{2}\.\d{2}\.\d{4})')
+    df['Date'] = pd.to_datetime(df['Date_str'], format='%d.%m.%Y', errors='coerce')
+
+    # Nettoyer les données
+    df = df.dropna(subset=['Date'])
+    df['Heures'] = pd.to_numeric(df['Heures'], errors='coerce').fillna(0)
+
+    # Ajouter les heures de coordination si disponible
+    if 'Coordinateurs' in df.columns:
+        df['Heures_Coordinateurs'] = pd.to_numeric(
+            df['Coordinateurs'], errors='coerce'
+        ).fillna(0)
+    else:
+        df['Heures_Coordinateurs'] = 0
+
+    # Calculer le total des heures (AT + Coordinateurs)
+    df['Heures_Total'] = df['Heures'] + df['Heures_Coordinateurs']
+
+    # Sélectionner les colonnes finales
+    df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
+
+    return df_clean
+
+
+def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) -> pd.DataFrame:
+    """
+    Parse le nouveau format Excel (depuis sept 2025):
+    - Colonnes: Libellé, Quantité, Prix, Montant
+    - Libellé: "Heures AT", "Heures ATR", etc.
+    - Quantité: nombre d'heures
+    - Prix: coût horaire
+    - Montant: coût total (Quantité × Prix)
+    """
+    # Lire le fichier Excel sans header pour trouver les en-têtes
+    df_raw = pd.read_excel(file_path, header=None)
+
+    # Trouver la ligne d'en-tête
+    header_row = None
+    for idx, row in df_raw.iterrows():
+        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
+        if 'libellé' in row_str and 'quantité' in row_str:
+            header_row = idx
+            break
+
+    if header_row is None:
+        st.warning(f"⚠️ En-têtes nouveau format non trouvés dans {file_path.name}")
+        return pd.DataFrame()
+
+    # Lire avec les bonnes en-têtes
+    df = pd.read_excel(file_path, header=header_row)
+
+    # Normaliser les noms de colonnes
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # Vérifier les colonnes requises
+    required_cols = ['Libellé', 'Quantité', 'Prix', 'Montant']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+
+    if missing_cols:
+        st.warning(f"⚠️ Colonnes manquantes dans {file_path.name}: {missing_cols}")
+        return pd.DataFrame()
+
+    # Filtrer les lignes valides (avec libellé et quantité > 0)
+    df = df[df['Libellé'].notna() & (df['Libellé'] != '')].copy()
+    df['Quantité'] = pd.to_numeric(df['Quantité'], errors='coerce').fillna(0)
+    df['Prix'] = pd.to_numeric(df['Prix'], errors='coerce').fillna(0)
+    df['Montant'] = pd.to_numeric(df['Montant'], errors='coerce').fillna(0)
+
+    # Filtrer les lignes avec quantité > 0
+    df = df[df['Quantité'] > 0].copy()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # Extraire le type de personnel depuis le libellé
+    def extract_type_personnel(libelle: str) -> str:
+        """Extrait le type de personnel depuis 'Heures AT', 'Heures ATR', etc."""
+        libelle = str(libelle).strip()
+
+        # Pattern: "Heures XXX" ou "Heure XXX"
+        match = re.search(r'(?:Heures?)\s+(.+)', libelle, re.IGNORECASE)
+        if match:
+            type_str = match.group(1).strip()
+        else:
+            # Fallback: prendre tout le libellé
+            type_str = libelle
+
+        # Normaliser
+        type_lower = type_str.lower()
+
+        # Mappings connus
+        if 'atf' in type_lower or 'formateur' in type_lower:
+            return 'ATF'
+        if 'atr' in type_lower:
+            return 'ATR'
+        if 'coordinateur' in type_lower:
+            return 'Coordinateurs'
+        if 'csc' in type_lower:
+            return 'CSC'
+        if "gestion d'accès" in type_lower or 'gestion acces' in type_lower:
+            return 'Gestion d\'accès'
+        if 'visitor' in type_lower:
+            return 'Visitor Center'
+        if re.search(r'\bat\b', type_lower):  # mot isolé "AT"
+            return 'AT'
+
+        # Types inconnus → catégorie "extra"
+        return 'extra'
+
+    df['Type'] = df['Libellé'].apply(extract_type_personnel)
+
+    # Vérifier les prix avec la configuration si disponible
+    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+        personnel_df = st.session_state.personnel
+
+        for _, row in df.iterrows():
+            type_pers = row['Type']
+            prix_facture = row['Prix']
+
+            # Chercher le coût horaire configuré
+            matching = personnel_df[personnel_df['Type'] == type_pers]
+            if not matching.empty:
+                cout_config = float(matching['Coût Horaire'].iloc[0])
+                # Tolérance de 1% pour comparaison
+                if abs(prix_facture - cout_config) > cout_config * 0.01:
+                    st.warning(
+                        f"⚠️ {file_path.name}: Prix facturé pour {type_pers} ({prix_facture:.2f} CHF/h) "
+                        f"diffère de la configuration ({cout_config:.2f} CHF/h)"
+                    )
+
+    # Créer une ligne par mois avec toutes les catégories
+    date = dt.date(file_year, file_month, 1)
+    row_data = {'Date': date}
+
+    total_heures = 0.0
+    total_cout = 0.0
+
+    # Grouper par type
+    for type_pers, group in df.groupby('Type'):
+        heures = group['Quantité'].sum()
+        cout = group['Montant'].sum()
+
+        row_data[f'Heures_{type_pers}'] = heures
+        row_data[f'Cout_{type_pers}'] = cout
+
+        total_heures += heures
+        total_cout += cout
+
+    row_data['Heures_Total'] = total_heures
+    row_data['Cout_Total'] = total_cout
+
+    # Créer le DataFrame final
+    result_df = pd.DataFrame([row_data])
+
+    st.info(f"✓ {file_path.name} (nouveau format): {len(df)} lignes, {len(df['Type'].unique())} types")
+
+    return result_df
 
 
 def _apply_pdf_category_mapping(pdf_df: pd.DataFrame) -> pd.DataFrame:
