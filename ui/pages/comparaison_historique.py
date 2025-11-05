@@ -182,16 +182,58 @@ def render_comparaison_historique_page():
             var_name='Zone', value_name='Passagers'
         )
 
-        # Graphique Altair comparatif
-        chart_compare = alt.Chart(pax_long).mark_bar().encode(
-            x=alt.X('Heure:O', sort=None, title='Heure'),
-            y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
-            color=alt.Color('Zone:N', title='Zone'),
-            xOffset=alt.XOffset('Type:N', title='Type'),
-            tooltip=['Heure', 'Type', 'Zone', 'Passagers']
-        ).properties().interactive()
-
+        # --- Graphique Altair comparatif avec couleurs différenciées ---
+        # Historique : gris clair/foncé ; Prévisions : couleurs brand
+        gray_scale = alt.Scale(
+            domain=['Pax Schengen', 'Pax Non-Schengen'],
+            range=['#E0E0E0', '#A0A0A0']  # gris clair / gris foncé
+        )
+        brand_scale = alt.Scale(
+            domain=['Pax Schengen', 'Pax Non-Schengen'],
+            range=['#2E86C1', '#17A589']  # adapte à ta charte si besoin
+        )
+        
+        # Fusion Historique / Prévisions
+        pax_long['Zone_Type'] = pax_long['Zone'] + ' (' + pax_long['Type'] + ')'
+        
+        # Palette personnalisée : gris pour Historique, bleu/vert pour Prévisions
+        custom_scale = alt.Scale(
+            domain=[
+                'Pax Schengen (Historique)',
+                'Pax Non-Schengen (Historique)',
+                'Pax Schengen (Prévisions)',
+                'Pax Non-Schengen (Prévisions)'
+            ],
+            range=['#E0E0E0', '#A0A0A0', '#2E86C1', '#17A589']
+        )
+        
+        chart_compare = (
+            alt.Chart(pax_long)
+            .mark_bar()
+            .encode(
+                x=alt.X('Heure:O', sort=None, title=''),
+                y=alt.Y('Passagers:Q', title=f'Passagers ({pax_filter_compare})'),
+                xOffset='Type:N',
+                color=alt.Color(
+                    'Zone_Type:N',
+                    title='',
+                    scale=custom_scale,
+                    legend=alt.Legend(
+                        orient='bottom',          # Légende sous le graphe
+                        direction='horizontal',   # Alignée horizontalement
+                        titleAlign='center',
+                        labelFontSize=11,
+                        symbolSize=120,
+                        padding=10
+                    )
+                ),
+                tooltip=['Heure', 'Type', 'Zone', 'Passagers']
+            )
+            .properties(height=400)
+            .interactive()
+        )
         st.altair_chart(chart_compare, use_container_width=True)
+
 
     else:
         st.info("Veuillez sélectionner une date historique et une date prévisionnelle.")
