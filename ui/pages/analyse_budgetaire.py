@@ -615,6 +615,114 @@ def render_analyse_budgetaire_page():
             <div class="value">{heures_realise:,.0f} h</div>
             <div class="delta">{symb} {abs(ecart_heures_real_mod):,.0f} h ({ecart_heures_real_mod_pct:+.1f}%)</div></div>""", unsafe_allow_html=True)
 
+    # =================== Évolution Mensuelle (Non Cumulée) ===================
+    st.markdown("---")
+    st.subheader(f"📊 Évolution Mensuelle {year}")
+
+    calendar_with_modif = budget_modifie.get('calendar_df', pd.DataFrame())
+    if not calendar_with_modif.empty:
+        try:
+            calendar_with_modif['Date'] = pd.to_datetime(calendar_with_modif['Date'])
+            calendar_with_modif['Mois'] = calendar_with_modif['Date'].dt.to_period('M')
+
+            calendar_annuel = bs.get('calendar_df', pd.DataFrame()).copy()
+            calendar_annuel['Date'] = pd.to_datetime(calendar_annuel['Date'])
+            calendar_annuel['Mois'] = calendar_annuel['Date'].dt.to_period('M')
+
+            # Agrégation mensuelle (NON CUMULÉE)
+            monthly_annuel = calendar_annuel.groupby('Mois').agg({
+                'Heures_Total_Jour': 'sum', 'Coût_Total_Jour': 'sum'
+            }).reset_index().rename(columns={'Heures_Total_Jour':'Heures_Annuel','Coût_Total_Jour':'Cout_Annuel'})
+
+            monthly_modifie = calendar_with_modif.groupby('Mois').agg({
+                'Heures_Total_Jour': 'sum', 'Coût_Total_Jour': 'sum'
+            }).reset_index().rename(columns={'Heures_Total_Jour':'Heures_Modifie','Coût_Total_Jour':'Cout_Modifie'})
+
+            monthly_budget = monthly_annuel.merge(monthly_modifie, on='Mois', how='outer')
+            monthly_budget['Mois_str'] = monthly_budget['Mois'].astype(str)
+            monthly_budget['Mois_dt'] = monthly_budget['Mois'].apply(lambda x: x.to_timestamp())
+
+            # Ajouter les données de facturation si disponibles
+            if not df_factu.empty:
+                df_factu_temp = df_factu.copy()
+                df_factu_temp['Mois'] = pd.to_datetime(df_factu_temp['Date']).dt.to_period('M')
+                monthly_factu = df_factu_temp.groupby('Mois').agg({'Heures_Total':'sum'}).reset_index()
+                monthly_factu['Mois_str'] = monthly_factu['Mois'].astype(str)
+                monthly_factu['Mois_dt'] = monthly_factu['Mois'].apply(lambda x: x.to_timestamp())
+
+                tarif_at = 0.0
+                t_at = st.session_state.get('cost_mapping', {}).get("AT")
+                if t_at:
+                    pers = st.session_state.get('personnel', pd.DataFrame())
+                    if not pers.empty:
+                        r = pers[pers['Type'] == t_at]
+                        if not r.empty:
+                            tarif_at = float(r['Coût Horaire'].iloc[0])
+
+                monthly_factu['Cout_Realise'] = monthly_factu['Heures_Total'] * tarif_at
+                monthly_factu.rename(columns={'Heures_Total': 'Heures_Realise'}, inplace=True)
+
+                monthly_combined = monthly_budget.merge(
+                    monthly_factu[['Mois_str', 'Heures_Realise', 'Cout_Realise']],
+                    on='Mois_str', how='left'
+                )
+            else:
+                monthly_combined = monthly_budget.copy()
+                monthly_combined['Heures_Realise'] = None
+                monthly_combined['Cout_Realise'] = None
+
+            # Préparer les données pour les graphiques mensuels (NON CUMULÉS)
+            df_heures_mensuel = pd.DataFrame({
+                'Mois': monthly_combined['Mois_dt'].tolist() * 3,
+                'Type': (['Budget Annuel']*len(monthly_combined) + ['Budget Modifié']*len(monthly_combined) + ['Réalisé']*len(monthly_combined)),
+                'Heures': (monthly_combined['Heures_Annuel'].tolist() + monthly_combined['Heures_Modifie'].tolist() + monthly_combined['Heures_Realise'].tolist())
+            })
+            df_cout_mensuel = pd.DataFrame({
+                'Mois': monthly_combined['Mois_dt'].tolist() * 3,
+                'Type': (['Budget Annuel']*len(monthly_combined) + ['Budget Modifié']*len(monthly_combined) + ['Réalisé']*len(monthly_combined)),
+                'Cout': (monthly_combined['Cout_Annuel'].tolist() + monthly_combined['Cout_Modifie'].tolist() + monthly_combined['Cout_Realise'].tolist())
+            })
+            df_heures_mensuel = df_heures_mensuel.dropna(subset=['Heures'])
+            df_cout_mensuel = df_cout_mensuel.dropna(subset=['Cout'])
+
+            tab_cout_m, tab_heures_m = st.tabs(["💰 Coûts Mensuels (CHF)", "⏱️ Heures Mensuelles"])
+            with tab_cout_m:
+                if not df_cout_mensuel.empty:
+                    chart_cout_m = alt.Chart(df_cout_mensuel).mark_bar().encode(
+                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        y=alt.Y('Cout:Q', title='Coût Mensuel (CHF)'),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié','Réalisé'],
+                                                                  range=['#0076aa','#ffa500','#dc143c']),
+                                        legend=alt.Legend(title='Type de Budget')),
+                        xOffset=alt.XOffset('Type:N'),
+                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                                 alt.Tooltip('Type:N', title='Type'),
+                                 alt.Tooltip('Cout:Q', title='Coût Mensuel', format=',.0f')]
+                    ).properties(height=400).interactive()
+                    st.altair_chart(chart_cout_m, use_container_width=True)
+                else:
+                    st.info("Pas de données disponibles pour tracer la courbe des coûts mensuels.")
+            with tab_heures_m:
+                if not df_heures_mensuel.empty:
+                    chart_heures_m = alt.Chart(df_heures_mensuel).mark_bar().encode(
+                        x=alt.X('Mois:T', title='Mois', axis=alt.Axis(format='%b %Y')),
+                        y=alt.Y('Heures:Q', title='Heures Mensuelles'),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Budget Annuel','Budget Modifié','Réalisé'],
+                                                                  range=['#0076aa','#ffa500','#dc143c']),
+                                        legend=alt.Legend(title='Type de Budget')),
+                        xOffset=alt.XOffset('Type:N'),
+                        tooltip=[alt.Tooltip('Mois:T', title='Mois', format='%B %Y'),
+                                 alt.Tooltip('Type:N', title='Type'),
+                                 alt.Tooltip('Heures:Q', title='Heures Mensuelles', format=',.0f')]
+                    ).properties(height=400).interactive()
+                    st.altair_chart(chart_heures_m, use_container_width=True)
+                else:
+                    st.info("Pas de données disponibles pour tracer la courbe des heures mensuelles.")
+        except Exception as e:
+            st.error(f"Erreur lors de la création des graphiques mensuels: {e}")
+            import traceback
+            st.error(traceback.format_exc())
+
     # =================== Évolution Cumulée ===================
     st.markdown("---")
     st.subheader(f"📈 Évolution Cumulée {year}")
