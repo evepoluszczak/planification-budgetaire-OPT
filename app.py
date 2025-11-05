@@ -48,6 +48,18 @@ if st.session_state.show_help_dialog:
 
 # =================== Écran d'accueil (si données non chargées) ===================
 if not st.session_state.data_loaded:
+    # Masquer la sidebar sur l'écran d'accueil
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        [data-testid="collapsedControl"] {
+            display: none;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     if st.button("Ouvrir le Mode d'emploi"):
         st.session_state.show_help_dialog = True
         st.rerun()
