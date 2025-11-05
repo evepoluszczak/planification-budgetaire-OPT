@@ -174,6 +174,44 @@ def _parse_old_excel_format(file_path: Path, file_year: int, file_month: int) ->
     # Sélectionner les colonnes finales
     df_clean = df[['Date', 'Heures', 'Heures_Coordinateurs', 'Heures_Total']].copy()
 
+    # Afficher un expander cliquable avec les détails de la facture
+    total_heures_at = df_clean['Heures'].sum()
+    total_heures_coord = df_clean['Heures_Coordinateurs'].sum()
+    total_heures = df_clean['Heures_Total'].sum()
+
+    with st.expander(f"✓ {file_path.name} (ancien format): {len(df_clean)} jours"):
+        st.caption(f"**Mois**: {file_month:02d}/{file_year}")
+        st.caption(f"**Total**: {total_heures:,.0f} heures")
+
+        # Créer un tableau détaillé par type
+        detail_rows = []
+        if total_heures_at > 0:
+            detail_rows.append({
+                'Type': 'AT',
+                'Heures': total_heures_at,
+                'Jours': len(df_clean[df_clean['Heures'] > 0])
+            })
+        if total_heures_coord > 0:
+            detail_rows.append({
+                'Type': 'Coordinateurs',
+                'Heures': total_heures_coord,
+                'Jours': len(df_clean[df_clean['Heures_Coordinateurs'] > 0])
+            })
+
+        if detail_rows:
+            df_detail = pd.DataFrame(detail_rows)
+
+            st.dataframe(
+                df_detail,
+                column_config={
+                    'Type': st.column_config.TextColumn('Type', width='medium'),
+                    'Heures': st.column_config.NumberColumn('Heures', format='%.1f h'),
+                    'Jours': st.column_config.NumberColumn('Jours', format='%d')
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+
     return df_clean
 
 
@@ -307,7 +345,37 @@ def _parse_new_excel_format(file_path: Path, file_year: int, file_month: int) ->
     # Créer le DataFrame final
     result_df = pd.DataFrame([row_data])
 
-    st.info(f"✓ {file_path.name} (nouveau format): {len(df)} lignes, {len(df['Type'].unique())} types")
+    # Afficher un expander cliquable avec les détails de la facture
+    with st.expander(f"✓ {file_path.name} (nouveau format): {len(df)} lignes, {len(df['Type'].unique())} types"):
+        st.caption(f"**Mois**: {file_month:02d}/{file_year}")
+        st.caption(f"**Total**: {total_heures:,.0f} heures · {total_cout:,.2f} CHF")
+
+        # Créer un tableau détaillé par type
+        detail_rows = []
+        for type_pers, group in df.groupby('Type'):
+            detail_rows.append({
+                'Type': type_pers,
+                'Heures': group['Quantité'].sum(),
+                'Coût Total (CHF)': group['Montant'].sum(),
+                'Coût Horaire Moyen (CHF)': group['Montant'].sum() / group['Quantité'].sum() if group['Quantité'].sum() > 0 else 0,
+                'Lignes': len(group)
+            })
+
+        df_detail = pd.DataFrame(detail_rows)
+        df_detail = df_detail.sort_values('Heures', ascending=False)
+
+        st.dataframe(
+            df_detail,
+            column_config={
+                'Type': st.column_config.TextColumn('Type', width='medium'),
+                'Heures': st.column_config.NumberColumn('Heures', format='%.1f h'),
+                'Coût Total (CHF)': st.column_config.NumberColumn('Coût Total', format='%.2f CHF'),
+                'Coût Horaire Moyen (CHF)': st.column_config.NumberColumn('Coût/h', format='%.2f CHF/h'),
+                'Lignes': st.column_config.NumberColumn('Lignes', format='%d')
+            },
+            hide_index=True,
+            use_container_width=True
+        )
 
     return result_df
 
