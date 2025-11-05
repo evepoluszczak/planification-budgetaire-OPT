@@ -670,7 +670,6 @@ def render_analyse_budgetaire_page():
             st.error(traceback.format_exc())
 
     # =================== Tableau Détaillé Mensuel ===================
-    # =================== Tableau Détaillé Mensuel ===================
     
     st.markdown("---")
     st.subheader("📋 Détail Mensuel")
@@ -681,13 +680,14 @@ def render_analyse_budgetaire_page():
             monthly_table = monthly_combined.copy()
             monthly_table['Mois'] = monthly_table['Mois_str']
     
-            # Par défaut, on garde uniquement Modifié
+            # Colonnes Modifié (sécurité)
             monthly_table['Heures_Modifie'] = monthly_table.get('Heures_Modifie', 0).fillna(0)
             monthly_table['Cout_Modifie'] = monthly_table.get('Cout_Modifie', 0).fillna(0)
     
-            # Ajout des colonnes "Facturées" (si fichiers dispo)
+            # Ajout des colonnes "Facturées" (si factures dispo)
             if not df_factu.empty:
                 monthly_factu_raw = df_factu.groupby('Mois').agg({'Heures_Total': 'sum'}).reset_index()
+                # clef de jointure = texte AAAA-MM
                 monthly_factu_raw['Mois_str'] = monthly_factu_raw['Mois'].astype(str)
     
                 # Tarif AT pour valoriser le coût facturé
@@ -702,18 +702,25 @@ def render_analyse_budgetaire_page():
     
                 monthly_factu_raw['Cout_Facture'] = monthly_factu_raw['Heures_Total'] * tarif_at
     
-                # Merge sur le mois
+                # Pour éviter tout conflit de nom, on renomme la clef côté droit
+                right = monthly_factu_raw[['Mois_str', 'Heures_Total', 'Cout_Facture']].rename(
+                    columns={'Mois_str': '__MoisKey__'}
+                )
+    
+                # Merge sur la clef texte
                 monthly_table = monthly_table.merge(
-                    monthly_factu_raw[['Mois_str', 'Heures_Total', 'Cout_Facture']],
+                    right,
                     left_on='Mois',
-                    right_on='Mois_str',
+                    right_on='__MoisKey__',
                     how='left'
-                ).drop(columns=['Mois_str'])
+                )
+    
+                # Nettoyage des colonnes techniques si elles existent
+                if '__MoisKey__' in monthly_table.columns:
+                    monthly_table.drop(columns='__MoisKey__', inplace=True)
     
                 # Renommer pour l'affichage
-                monthly_table.rename(columns={
-                    'Heures_Total': 'Heures_Facturees'
-                }, inplace=True)
+                monthly_table.rename(columns={'Heures_Total': 'Heures_Facturees'}, inplace=True)
             else:
                 # Colonnes vides si pas de factures
                 monthly_table['Heures_Facturees'] = pd.NA
@@ -757,6 +764,7 @@ def render_analyse_budgetaire_page():
             st.error(f"Erreur lors de la création du tableau mensuel: {e}")
             import traceback
             st.error(traceback.format_exc())
+
 
 
     # =================== Notes ===================
