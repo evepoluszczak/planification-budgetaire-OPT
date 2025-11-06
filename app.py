@@ -13,7 +13,8 @@ from core.data_loader import load_pax_data
 from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import start_pax_loading, check_pax_loading_status, get_pax_loading_info
-from utils.autosave import save_session_state_auto, load_session_state_auto, autosave_exists, get_autosave_info, list_all_autosaves
+from utils.autosave import (save_session_state_auto, load_session_state_auto, autosave_exists,
+                             get_autosave_info, list_all_autosaves, has_session_changed)
 from ui.components import show_help_dialog, planning_editor_ui
 from zoneinfo import ZoneInfo
 
@@ -169,28 +170,30 @@ else:
     # Fragment pour la sauvegarde automatique périodique (toutes les 2 minutes)
     @st.fragment(run_every="120s")
     def autosave_fragment():
-        """Fragment qui sauvegarde automatiquement l'état toutes les 2 minutes"""
+        """Fragment qui sauvegarde automatiquement l'état toutes les 2 minutes SI des changements sont détectés"""
         if st.session_state.get('data_loaded', False):
             try:
-                save_session_state_auto()
-                # Mettre à jour un timestamp pour tracking
-                st.session_state.last_autosave = dt.datetime.now().isoformat()
+                # Sauvegarder UNIQUEMENT si des changements sont détectés
+                if has_session_changed():
+                    save_session_state_auto()
+                    # Mettre à jour un timestamp pour tracking
+                    st.session_state.last_autosave = dt.datetime.now().isoformat()
+                    st.session_state.last_autosave_status = "✓ Modifié"
+                else:
+                    # Indiquer qu'aucun changement n'a été détecté
+                    st.session_state.last_autosave_status = "○ Aucun changement"
             except Exception as e:
                 # Ne pas perturber l'utilisateur avec les erreurs d'autosave
+                st.session_state.last_autosave_status = "✗ Erreur"
                 pass
 
     # Lancer le fragment d'autosave
     autosave_fragment()
 
-    # Fonction helper pour changer de page avec autosave
+    # Fonction helper pour changer de page SANS autosave
     def change_page(page_name):
-        """Change de page et déclenche une sauvegarde automatique"""
+        """Change de page sans déclencher de sauvegarde (sauvegarde auto toutes les 2 min si changements)"""
         st.session_state.selected_page = page_name
-        # Sauvegarder avant de changer de page
-        try:
-            save_session_state_auto()
-        except:
-            pass  # Ne pas bloquer si la sauvegarde échoue
         st.rerun()
 
     # Sidebar : Navigation et Export
@@ -250,18 +253,19 @@ else:
                 # Convertir en fuseau horaire Paris
                 last_save = dt.datetime.fromisoformat(st.session_state.last_autosave)
                 paris_tz = ZoneInfo("Europe/Paris")
-                # Si last_save est naïf (pas de timezone), on l’assigne au fuseau local
+                # Si last_save est naïf (pas de timezone), on l'assigne au fuseau local
                 if last_save.tzinfo is None:
                     last_save = last_save.replace(tzinfo=ZoneInfo("UTC")).astimezone(paris_tz)
                 else:
                     last_save = last_save.astimezone(paris_tz)
-        
+
                 last_save_str = last_save.strftime('%H:%M:%S')
-                st.caption(f"💾 Dernière sauvegarde automatique : {last_save_str}")
+                status = st.session_state.get('last_autosave_status', '')
+                st.caption(f"💾 Dernière vérification : {last_save_str} {status}")
             except Exception:
-                st.caption("💾 Sauvegarde automatique active")
+                st.caption("💾 Sauvegarde auto (sur modifications)")
         else:
-            st.caption("💾 Sauvegarde automatique active")
+            st.caption("💾 Sauvegarde auto (sur modifications)")
 
         st.divider()
 
