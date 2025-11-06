@@ -8,6 +8,7 @@ Page Simulateur Objectif - Simulation d'objectifs de coût (améliorée)
 - Visualisations (barres triées + pseudo-waterfall)
 - Scénarios (enregistrer, comparer, exporter)
 - Export XLSX avec fallback (openpyxl), sinon CSV
+- Sauvegarde automatique des résultats dans st.session_state
 """
 from __future__ import annotations
 
@@ -174,7 +175,7 @@ def _weights_from_calendar_costs() -> dict[str, float]:
         return _weights_equitable()
 
     rates, _ = _hourly_rates_by_category()
-    has_cost_cols = any([f"Coût_{c}" in cal.columns for c in cats]) or any([f"Coût_{c}".replace("Coût_", "Coût_") in cal.columns for c in cats])
+    has_cost_cols = any([f"Coût_{c}" in cal.columns for c in cats])
 
     weights = {}
     for c in cats:
@@ -336,6 +337,34 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
 
     st.error("Impossible de générer un fichier d’export (XLSX/CSV).")
     return b"", "bin", "application/octet-stream"
+
+
+def _save_simulator_results_to_session(results_df: pd.DataFrame,
+                                       target_adjustment: float,
+                                       distribution_pct: dict[str, float],
+                                       rounding: str,
+                                       cap_pct: float) -> None:
+    """
+    Sauvegarde les résultats du simulateur dans st.session_state
+    pour consommation par l'assistant Besoin Jour.
+    """
+    if results_df is None or results_df.empty:
+        st.session_state.pop("simulateur_objectif_results", None)
+        st.session_state.pop("simulateur_objectif_meta", None)
+        return
+
+    df = results_df.copy()
+    if "Catégorie" in df.columns:
+        df["Catégorie"] = df["Catégorie"].astype(str)
+
+    st.session_state["simulateur_objectif_results"] = df
+    st.session_state["simulateur_objectif_meta"] = {
+        "target_adjustment": float(target_adjustment),
+        "distribution_pct": {k: float(v) for k, v in distribution_pct.items()},
+        "rounding": str(rounding),
+        "cap_pct": float(cap_pct),
+        "saved_at": pd.Timestamp.now().isoformat(timespec="seconds")
+    }
 
 
 # =========================
@@ -507,6 +536,15 @@ def render_simulateur_objectif_page():
 
         results_df = _results_table(target_adjustment, distrib_pct, rates, rounding)
 
+        # ⬇️ Enregistrement automatique pour l'assistant Besoin Jour
+        _save_simulator_results_to_session(
+            results_df=results_df,
+            target_adjustment=target_adjustment,
+            distribution_pct=distrib_pct,
+            rounding=rounding,
+            cap_pct=cap_pct
+        )
+
         st.subheader("Résultat de la Simulation")
         st.dataframe(
             results_df,
@@ -537,6 +575,7 @@ def render_simulateur_objectif_page():
             top = results_df.sort_values("Ajustement Coût (CHF)", ascending=False)
 
             # Barres (CHF)
+            # Remarque : Altair v5 exige des noms de champs valides et types corrects.
             bar_chf = alt.Chart(top).mark_bar().encode(
                 x=alt.X("Ajustement Coût (CHF):Q", title="Impact (CHF)"),
                 y=alt.Y("Catégorie:N", sort='-x', title="Catégorie"),
@@ -580,6 +619,15 @@ def render_simulateur_objectif_page():
             }
             st.session_state.setdefault("sim_scenarios", {})[sc_name] = scen_payload
             st.success(f"Scénario **{sc_name}** enregistré.")
+
+            # (optionnel) rafraîchir l’état partagé pour l’assistant :
+            _save_simulator_results_to_session(
+                results_df=results_df,
+                target_adjustment=target_adjustment,
+                distribution_pct=distrib_pct,
+                rounding=rounding,
+                cap_pct=cap_pct
+            )
 
         # Export du scénario courant (avec fallback automatique)
         if not results_df.empty:
@@ -656,7 +704,7 @@ def render_simulateur_objectif_page():
                         },
                     )
         
-                    # Long format propre pour Altair (ASCII → labels lisibles)
+                    # Long format propre pour Altair
                     long = cmp.melt(
                         id_vars="Catégorie",
                         value_vars=["Delta_Cout", "Delta_Heures"],
