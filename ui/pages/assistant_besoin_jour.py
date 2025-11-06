@@ -5,17 +5,18 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import calendar
 
 # ============================================================
-# Helpers
+# Helpers (FR labels)
 # ============================================================
 
 FR_MONTHS = {
     1: "janvier", 2: "février", 3: "mars", 4: "avril", 5: "mai", 6: "juin",
     7: "juillet", 8: "août", 9: "septembre", 10: "octobre", 11: "novembre", 12: "décembre"
 }
-FR_WEEKDAYS = {0: "Lundi", 1: "Mardi", 2: "Mercredi", 3: "Jeudi", 4: "Vendredi", 5: "Samedi", 6: "Dimanche"}
+FR_WEEKDAYS = {
+    0: "Lundi", 1: "Mardi", 2: "Mercredi", 3: "Jeudi", 4: "Vendredi", 5: "Samedi", 6: "Dimanche"
+}
 
 
 def _safe_hours_series(df: pd.DataFrame, col_candidates: list[str]) -> pd.Series:
@@ -27,7 +28,7 @@ def _safe_hours_series(df: pd.DataFrame, col_candidates: list[str]) -> pd.Series
 
 
 def _prepare_calendar(calendar_df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise les colonnes nécessaires et ajoute Mois/Weekday FR."""
+    """Normalise les colonnes nécessaires et ajoute Mois/Jour FR + Heures_AT_base."""
     df = calendar_df.copy()
     if 'Date' not in df.columns:
         raise ValueError("La colonne 'Date' est absente du calendar_df.")
@@ -37,20 +38,23 @@ def _prepare_calendar(calendar_df: pd.DataFrame) -> pd.DataFrame:
 
     # Colonnes de base usuelles
     if 'Jour' not in df.columns:
-        df['Jour'] = df['Date'].dt.day_name()  # sera re-labellé FR ci-dessous
+        # on laissera la version FR ci-dessous
+        df['Jour'] = df['Date'].dt.day_name()
+
     if 'Saison' not in df.columns:
         df['Saison'] = "Standard"
 
-    # Heures AT du jour : on cherche des colonnes usuelles
+    # Heures AT du jour : candidates
     df['Heures_AT_base'] = _safe_hours_series(df, ['Heures_AT', 'Heures AT', 'H_AT', 'AT'])
-    # Si rien trouvé, on essaie de répartir les heures totales sur AT=0 (on laisse à 0)
-    # L’assistant reste non intrusif.
 
     # Enrichissements temporels
     df['Mois'] = df['Date'].dt.month
     df['Mois_FR'] = df['Mois'].map(FR_MONTHS)
     df['Weekday'] = df['Date'].dt.weekday  # 0=Lundi
     df['Jour_FR'] = df['Weekday'].map(FR_WEEKDAYS)
+
+    # Remplace 'Jour' par label FR pour cohérence UI
+    df['Jour'] = df['Jour_FR']
 
     # Tri par date
     df = df.sort_values('Date').reset_index(drop=True)
@@ -71,7 +75,7 @@ def _filter_with_locks(df: pd.DataFrame,
         out = out[out['Saison'].astype(str).isin(seasons_keep)]
 
     if weekdays_keep:
-        out = out[out['Jour_FR'].isin(weekdays_keep)]
+        out = out[out['Jour'].isin(weekdays_keep)]
 
     return out.reset_index(drop=True)
 
@@ -86,10 +90,19 @@ def _build_suggestions(df_candidates: pd.DataFrame,
     mode = 'reduce' (on enlève) ou 'add' (on ajoute).
     - reduce : on commence par les jours les plus chargés (Heures_AT_base décroissant)
     - add    : on commence par les jours les moins chargés (Heures_AT_base croissant)
+
+    df_candidates DOIT contenir : ['Date','Jour','Saison','Mois_FR','Heures_AT_base']
     """
+    required_cols = {'Date', 'Jour', 'Saison', 'Mois_FR', 'Heures_AT_base'}
+    missing = required_cols - set(df_candidates.columns)
+    if missing:
+        raise KeyError(f"Colonnes manquantes pour _build_suggestions: {sorted(missing)}")
+
     if df_candidates.empty or target_hours == 0:
-        return pd.DataFrame(columns=['Date', 'Jour', 'Saison', 'Mois_FR',
-                                     'Heures_AT_base', 'Ajustement_propose', 'Heures_AT_nouvelles'])
+        return pd.DataFrame(columns=[
+            'Date', 'Jour', 'Saison', 'Mois_FR',
+            'Heures_AT_base', 'Ajustement_propose', 'Heures_AT_nouvelles'
+        ])
 
     df = df_candidates.copy()
     df = df.sort_values('Heures_AT_base', ascending=(mode == 'add')).reset_index(drop=True)
@@ -98,7 +111,7 @@ def _build_suggestions(df_candidates: pd.DataFrame,
     sign = -1.0 if mode == 'reduce' else 1.0
 
     adjustments = []
-    for i, r in df.iterrows():
+    for _, r in df.iterrows():
         if remaining <= 0:
             break
 
@@ -108,17 +121,17 @@ def _build_suggestions(df_candidates: pd.DataFrame,
 
         # En mode réduction, on évite de descendre sous 0
         if mode == 'reduce':
-            new_val = max(0.0, r['Heures_AT_base'] + sign * proposed)
-            proposed = r['Heures_AT_base'] - new_val  # peut être inférieur au proposed initial si on bute à 0
+            new_val = max(0.0, float(r['Heures_AT_base']) + sign * proposed)
+            proposed = float(r['Heures_AT_base']) - new_val  # ajusté si on touche 0
         else:
-            new_val = r['Heures_AT_base'] + sign * proposed
+            new_val = float(r['Heures_AT_base']) + sign * proposed
 
         if proposed <= 0:
             continue
 
         adjustments.append({
-            'Date': r['Date'].date(),
-            'Jour': r['Jour_FR'],
+            'Date': pd.to_datetime(r['Date']).date(),
+            'Jour': r['Jour'],
             'Saison': r['Saison'],
             'Mois_FR': r['Mois_FR'],
             'Heures_AT_base': round(float(r['Heures_AT_base']), 2),
@@ -157,11 +170,12 @@ def render_besoin_jour_assistant_page():
     year = int(pd.to_datetime(base_df['Date']).dt.year.mode().iloc[0]) if not base_df.empty else dt.date.today().year
     st.caption(f"Année détectée : {year}")
 
+    # -------- Bloc Objectif --------
     with st.container(border=True):
         st.subheader("Objectif global & pas d'ajustement")
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
-            mode = st.radio(
+            mode_label = st.radio(
                 "Type d’ajustement",
                 options=["Réduire des heures", "Ajouter des heures"],
                 index=0,
@@ -190,17 +204,17 @@ def render_besoin_jour_assistant_page():
             effective_mode = 'add'
             target_hours = target
         else:
-            effective_mode = 'reduce' if mode.startswith("Réduire") else 'add'
+            effective_mode = 'reduce' if mode_label.startswith("Réduire") else 'add'
             target_hours = 0.0
 
-        # Si l'utilisateur coche Ajouter mais met une valeur négative, on corrige la cohérence
-        if mode.startswith("Réduire") and effective_mode != 'reduce':
+        if mode_label.startswith("Réduire") and effective_mode != 'reduce':
             effective_mode = 'reduce'
             target_hours = abs(target)
-        if mode.startswith("Ajouter") and effective_mode != 'add':
+        if mode_label.startswith("Ajouter") and effective_mode != 'add':
             effective_mode = 'add'
             target_hours = abs(target)
 
+    # -------- Bloc Verrous --------
     with st.container(border=True):
         st.subheader("Verrous & filtres")
         st.markdown("Sélectionnez **ce que l’on est autorisé à toucher** (les autres sont verrouillés).")
@@ -226,7 +240,7 @@ def render_besoin_jour_assistant_page():
         )
 
         # Jours de semaine autorisés
-        weekdays_all = [FR_WEEKDAYS[i] for i in range(7)]
+        weekdays_all = list(FR_WEEKDAYS.values())
         weekdays_keep = st.multiselect(
             "Jours autorisés",
             options=weekdays_all,
@@ -246,16 +260,16 @@ def render_besoin_jour_assistant_page():
                 min_value=1, max_value=365, value=60, step=1
             )
 
-    # Filtrer le calendrier
+    # -------- Candidats après verrous --------
     candidates = _filter_with_locks(base_df, months_keep, seasons_keep, weekdays_keep)
 
-    # Zone d’alerte si le filtrage est trop strict
     with st.expander("État des candidats (debug)", expanded=False):
         st.caption(f"Jours candidats après verrous : **{len(candidates)}**")
-        by_month = candidates.groupby('Mois_FR')['Date'].count().rename('Jours').reset_index()
-        st.dataframe(by_month, hide_index=True, use_container_width=True)
+        if not candidates.empty:
+            by_month = candidates.groupby('Mois_FR')['Date'].count().rename('Jours').reset_index()
+            st.dataframe(by_month, hide_index=True, use_container_width=True)
 
-    # Construction des suggestions
+    # -------- Suggestions --------
     with st.container(border=True):
         st.subheader("Suggestions d’ajustements")
         if target_hours == 0:
@@ -266,10 +280,11 @@ def render_besoin_jour_assistant_page():
             st.warning("Aucun jour n’est éligible avec les verrous actuels. Assouplissez les filtres.")
             return
 
+        # IMPORTANT : on passe une table dont les colonnes correspondent à ce que _build_suggestions attend
+        df_for_algo = candidates[['Date', 'Jour', 'Saison', 'Mois_FR', 'Heures_AT_base']].copy()
+
         suggestions = _build_suggestions(
-            df_candidates=candidates[['Date', 'Jour_FR', 'Saison', 'Mois_FR', 'Heures_AT_base']].rename(
-                columns={'Jour_FR': 'Jour'}
-            ),
+            df_candidates=df_for_algo,
             target_hours=target_hours,
             step=float(step),
             max_per_day=float(max_per_day),
@@ -280,11 +295,10 @@ def render_besoin_jour_assistant_page():
             st.warning("Aucune suggestion n’a pu être générée (verrous trop stricts ou pas de delta atteignable).")
             return
 
-        # Limiter le nombre de lignes si demandé
+        # Limiter l’affichage si demandé
         if len(suggestions) > int(limit_rows):
             suggestions = suggestions.iloc[:int(limit_rows)].copy()
 
-        # Résumé
         total_adj = float(suggestions['Ajustement_propose'].sum())
         st.metric(
             "Ajustement total proposé (h)",
@@ -292,7 +306,6 @@ def render_besoin_jour_assistant_page():
             help="Somme des ajustements proposés. Un signe négatif = réduction."
         )
 
-        # Affichage plein écran
         st.dataframe(
             suggestions,
             hide_index=True,
@@ -320,7 +333,6 @@ def render_besoin_jour_assistant_page():
         )
 
         st.caption(
-            "💡 Astuce : vous pouvez appliquer ces propositions manuellement dans **Besoin Jour** "
-            "(ajouts/suppressions sur les jours concernés), ou me demander une version qui génère "
-            "directement des **ops JSON** compatibles avec votre moteur d’ajustements."
+            "💡 Astuce : applique ces propositions manuellement dans **Besoin Jour**. "
+            "Si tu veux une version qui génère directement des **ops JSON** exploitables par le moteur, dis-moi le format attendu."
         )
