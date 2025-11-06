@@ -14,7 +14,7 @@ from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import (
     start_pax_loading, check_pax_loading_status, get_pax_loading_info,
-    is_pax_data_cached_today, get_pax_cache_info
+    is_pax_data_cached_today, get_pax_cache_info, clear_pax_cache
 )
 from utils.autosave import (save_session_state_auto, load_session_state_auto, autosave_exists,
                              get_autosave_info, list_all_autosaves, has_session_changed)
@@ -281,21 +281,26 @@ else:
         st.subheader("Données PAX")
 
         # Chargement automatique si pas en cache aujourd'hui
-        if not is_pax_data_cached_today():
+        # La fonction is_pax_data_cached_today() vérifie le fichier cache local
+        # qui persiste entre les refreshs. Si elle retourne True, on ne charge JAMAIS.
+        cache_info = get_pax_cache_info()
+        is_cached = cache_info['is_cached']
+
+        if not is_cached:
+            # Pas en cache, vérifier si on doit lancer le chargement
             loading_status = st.session_state.get('pax_loading_status', 'idle')
-            # Lancer le chargement auto seulement si idle et fichiers présents
+
+            # Ne lancer que si status est idle (pas déjà en cours de chargement)
             if loading_status == 'idle':
                 forecast_exists = PAX_FORECAST_FILE_PATH.exists()
                 historical_exists = PAX_HISTORICAL_FILE_PATH.exists()
+
                 if forecast_exists or historical_exists:
-                    # Ne pas lancer si déjà en erreur pour éviter les boucles
-                    if st.session_state.get('pax_data_status') != 'attempted':
-                        start_pax_loading(PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH)
-                        st.toast("Chargement automatique des données PAX...", icon="🔄")
+                    start_pax_loading(PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH)
+                    st.toast("Chargement automatique des données PAX...", icon="🔄")
 
         # Afficher info de cache
-        cache_info = get_pax_cache_info()
-        if cache_info['is_cached']:
+        if is_cached:
             loaded_dt = cache_info.get('loaded_datetime')
             if loaded_dt:
                 st.caption(f"✅ Données en cache (chargées à {loaded_dt.strftime('%H:%M')})")
@@ -379,7 +384,7 @@ else:
 
         # Boutons d'action selon l'état
         loading_status = st.session_state.get('pax_loading_status', 'idle')
-        is_cached = is_pax_data_cached_today()
+        # Réutiliser la variable is_cached calculée plus haut
 
         if loading_status == 'idle':
             # Bouton pour lancer le chargement (ou rechargement si en cache)
@@ -399,6 +404,8 @@ else:
                     if not historical_exists:
                         st.warning(f"Historic_pax.xlsx non trouvé, chargement Forecast uniquement")
 
+                    # Supprimer le cache pour forcer le rechargement
+                    clear_pax_cache()
                     start_pax_loading(PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH)
                     st.toast("Chargement PAX démarré en arrière-plan...", icon="🔄")
                     st.rerun()
@@ -408,9 +415,10 @@ else:
             button_label = "🔄 Recharger" if not is_cached else "🔄 Forcer le rechargement"
 
             if st.button(button_label, use_container_width=True, type="secondary"):
+                # Supprimer le cache pour permettre le rechargement
+                clear_pax_cache()
                 st.session_state.pax_loading_status = 'idle'
                 st.session_state.pop('pax_data_status', None)
-                # Ne pas supprimer la date de cache si on veut garder l'info
                 st.toast("Prêt à recharger les données", icon="🔄")
                 st.rerun()
 

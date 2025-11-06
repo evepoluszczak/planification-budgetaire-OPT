@@ -164,6 +164,17 @@ class PaxLoaderThread(threading.Thread):
 PAX_CACHE_FILE = Path("input_files/.pax_cache_info.json")
 
 
+def clear_pax_cache():
+    """
+    Supprime le fichier de cache PAX pour forcer un rechargement.
+    """
+    try:
+        if PAX_CACHE_FILE.exists():
+            PAX_CACHE_FILE.unlink()
+    except Exception:
+        pass
+
+
 def _read_pax_cache_file() -> dict | None:
     """
     Lit le fichier de cache PAX local.
@@ -333,18 +344,19 @@ def check_pax_loading_status():
         else:
             st.session_state.pax_loading_error = None
 
-        # Stocker la date/heure de chargement si succès ou partiel
-        if status in ['success', 'partial']:
-            now = dt.datetime.now()
-            st.session_state.pax_loaded_date = now.date()
-            st.session_state.pax_loaded_datetime = now
+        # Stocker la date/heure de chargement et écrire dans le cache
+        # pour tous les statuts (succès, partiel, erreur) afin d'éviter
+        # les tentatives infinies en cas d'erreur
+        now = dt.datetime.now()
+        st.session_state.pax_loaded_date = now.date()
+        st.session_state.pax_loaded_datetime = now
 
-            # Écrire dans le fichier de cache pour persister entre refreshs
-            _write_pax_cache_file({
-                'loaded_date': now.date(),
-                'loaded_datetime': now,
-                'status': status
-            })
+        # Écrire dans le fichier de cache pour persister entre refreshs
+        _write_pax_cache_file({
+            'loaded_date': now.date(),
+            'loaded_datetime': now,
+            'status': status
+        })
 
         # Nettoyer la référence au thread
         del st.session_state.pax_loader_thread
