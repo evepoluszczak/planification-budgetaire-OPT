@@ -6,6 +6,7 @@ import datetime as dt
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+import json
 
 
 class PaxLoaderThread(threading.Thread):
@@ -160,37 +161,95 @@ class PaxLoaderThread(threading.Thread):
         return pax_agg, min_date, max_date
 
 
+PAX_CACHE_FILE = Path("input_files/.pax_cache_info.json")
+
+
+def _read_pax_cache_file() -> dict | None:
+    """
+    Lit le fichier de cache PAX local.
+    Retourne None si le fichier n'existe pas ou est invalide.
+    """
+    try:
+        if PAX_CACHE_FILE.exists():
+            with open(PAX_CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                # Convertir la date string en date object
+                if 'loaded_date' in data:
+                    data['loaded_date'] = dt.datetime.fromisoformat(data['loaded_date']).date()
+                if 'loaded_datetime' in data:
+                    data['loaded_datetime'] = dt.datetime.fromisoformat(data['loaded_datetime'])
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def _write_pax_cache_file(cache_data: dict) -> None:
+    """
+    Écrit les informations de cache dans le fichier local.
+    """
+    try:
+        # Convertir les dates en strings pour JSON
+        data_to_save = cache_data.copy()
+        if 'loaded_date' in data_to_save and isinstance(data_to_save['loaded_date'], dt.date):
+            data_to_save['loaded_date'] = data_to_save['loaded_date'].isoformat()
+        if 'loaded_datetime' in data_to_save and isinstance(data_to_save['loaded_datetime'], dt.datetime):
+            data_to_save['loaded_datetime'] = data_to_save['loaded_datetime'].isoformat()
+
+        PAX_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(PAX_CACHE_FILE, 'w') as f:
+            json.dump(data_to_save, f, indent=2)
+    except Exception:
+        pass
+
+
 def is_pax_data_cached_today() -> bool:
     """
     Vérifie si les données PAX ont déjà été chargées aujourd'hui.
+    Vérifie d'abord le fichier de cache local, puis session_state.
     Retourne True si les données sont en cache et datent d'aujourd'hui.
     """
-    # Vérifier si on a un timestamp de chargement
-    if 'pax_loaded_date' not in st.session_state:
-        return False
-
-    # Vérifier si les données sont présentes
-    has_forecast = st.session_state.get('pax_forecast_status') == 'loaded'
-    has_historical = st.session_state.get('pax_historical_status') == 'loaded'
-
-    if not (has_forecast or has_historical):
-        return False
-
-    # Vérifier si c'est aujourd'hui
-    loaded_date = st.session_state.pax_loaded_date
     today = dt.date.today()
 
-    return loaded_date == today
+    # D'abord vérifier le fichier de cache persistant
+    cache_file_data = _read_pax_cache_file()
+    if cache_file_data:
+        loaded_date = cache_file_data.get('loaded_date')
+        if loaded_date and loaded_date == today:
+            # Le cache est valide, restaurer dans session_state si nécessaire
+            if 'pax_loaded_date' not in st.session_state:
+                st.session_state.pax_loaded_date = loaded_date
+                st.session_state.pax_loaded_datetime = cache_file_data.get('loaded_datetime')
+            return True
+
+    # Sinon vérifier session_state (pour le cas où on vient de charger dans cette session)
+    if 'pax_loaded_date' in st.session_state:
+        loaded_date = st.session_state.pax_loaded_date
+        if loaded_date == today:
+            # Vérifier si les données sont présentes
+            has_forecast = st.session_state.get('pax_forecast_status') == 'loaded'
+            has_historical = st.session_state.get('pax_historical_status') == 'loaded'
+            return has_forecast or has_historical
+
+    return False
 
 
 def get_pax_cache_info() -> dict:
     """
     Retourne les informations sur le cache PAX.
+    Combine les infos du fichier et de session_state.
     """
+    # Lire le cache file d'abord
+    cache_file_data = _read_pax_cache_file()
+
+    # Utiliser les données du fichier ou de session_state
+    loaded_date = st.session_state.get('pax_loaded_date') or (cache_file_data.get('loaded_date') if cache_file_data else None)
+    loaded_datetime = st.session_state.get('pax_loaded_datetime') or (cache_file_data.get('loaded_datetime') if cache_file_data else None)
+
     return {
         'is_cached': is_pax_data_cached_today(),
-        'loaded_date': st.session_state.get('pax_loaded_date'),
-        'loaded_datetime': st.session_state.get('pax_loaded_datetime'),
+        'loaded_date': loaded_date,
+        'loaded_datetime': loaded_datetime,
         'forecast_status': st.session_state.get('pax_forecast_status'),
         'historical_status': st.session_state.get('pax_historical_status'),
     }
@@ -279,6 +338,13 @@ def check_pax_loading_status():
             now = dt.datetime.now()
             st.session_state.pax_loaded_date = now.date()
             st.session_state.pax_loaded_datetime = now
+
+            # Écrire dans le fichier de cache pour persister entre refreshs
+            _write_pax_cache_file({
+                'loaded_date': now.date(),
+                'loaded_datetime': now,
+                'status': status
+            })
 
         # Nettoyer la référence au thread
         del st.session_state.pax_loader_thread
