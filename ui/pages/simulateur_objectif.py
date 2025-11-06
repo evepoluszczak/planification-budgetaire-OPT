@@ -604,7 +604,7 @@ def render_simulateur_objectif_page():
                 mime=mime
             )
 
-        # Comparaison de scénarios
+        # === Comparaison de scénarios (robuste) ===
         scen_keys = list(st.session_state.get("sim_scenarios", {}).keys())
         if len(scen_keys) >= 2:
             colc1, colc2 = st.columns(2)
@@ -612,29 +612,84 @@ def render_simulateur_objectif_page():
                 sA = st.selectbox("Scénario A", scen_keys, key="cmpA")
             with colc2:
                 sB = st.selectbox("Scénario B", scen_keys, key="cmpB")
-
+        
             if sA and sB and sA != sB:
-                A = st.session_state.sim_scenarios[sA]["results"]
-                B = st.session_state.sim_scenarios[sB]["results"]
-                cmp = A.merge(B, on="Catégorie", how="outer", suffixes=(" A", " B")).fillna(0)
-                cmp["Δ Coût (B−A)"] = cmp["Ajustement Coût (CHF) B"] - cmp["Ajustement Coût (CHF) A"]
-                cmp["Δ Heures (B−A)"] = cmp["Ajustement Heures (h) B"] - cmp["Ajustement Heures (h) A"]
+                try:
+                    A = st.session_state.sim_scenarios[sA]["results"].copy()
+                    B = st.session_state.sim_scenarios[sB]["results"].copy()
+        
+                    # Garantir la présence des colonnes et numeric
+                    for df_ in (A, B):
+                        for col in ["Ajustement Coût (CHF)", "Ajustement Heures (h)"]:
+                            if col not in df_.columns:
+                                df_[col] = 0.0
+                            df_[col] = pd.to_numeric(df_[col], errors="coerce")
+        
+                    # Merge et deltas
+                    cmp = A.merge(B, on="Catégorie", how="outer", suffixes=("_A", "_B"))
+                    cmp["Delta_Cout"] = (
+                        cmp["Ajustement Coût (CHF)_B"].fillna(0.0) - cmp["Ajustement Coût (CHF)_A"].fillna(0.0)
+                    ).astype(float)
+                    cmp["Delta_Heures"] = (
+                        cmp["Ajustement Heures (h)_B"].fillna(0.0) - cmp["Ajustement Heures (h)_A"].fillna(0.0)
+                    ).astype(float)
+        
+                    # Affichage tableau comparaison
+                    cmp_display = cmp[[
+                        "Catégorie",
+                        "Ajustement Coût (CHF)_A", "Ajustement Coût (CHF)_B", "Delta_Cout",
+                        "Ajustement Heures (h)_A", "Ajustement Heures (h)_B", "Delta_Heures",
+                    ]].copy()
+        
+                    st.markdown("#### Comparaison A vs B")
+                    st.dataframe(
+                        cmp_display,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Ajustement Coût (CHF)_A": st.column_config.NumberColumn("Coût (A)", format="%.0f"),
+                            "Ajustement Coût (CHF)_B": st.column_config.NumberColumn("Coût (B)", format="%.0f"),
+                            "Delta_Cout": st.column_config.NumberColumn("Δ Coût (B−A)", format="%.0f"),
+                            "Ajustement Heures (h)_A": st.column_config.NumberColumn("Heures (A)", format="%.0f"),
+                            "Ajustement Heures (h)_B": st.column_config.NumberColumn("Heures (B)", format="%.0f"),
+                            "Delta_Heures": st.column_config.NumberColumn("Δ Heures (B−A)", format="%.0f"),
+                        },
+                    )
+        
+                    # Long format propre pour Altair (ASCII → labels lisibles)
+                    long = cmp.melt(
+                        id_vars="Catégorie",
+                        value_vars=["Delta_Cout", "Delta_Heures"],
+                        var_name="Type",
+                        value_name="Delta",
+                    )
+                    long = long[pd.notna(long["Delta"])].copy()
+                    long["Delta"] = long["Delta"].astype(float)
+                    long["Type"] = long["Type"].map({
+                        "Delta_Cout": "Δ Coût (B−A)",
+                        "Delta_Heures": "Δ Heures (B−A)",
+                    })
+        
+                    # Barres des deltas
+                    if not long.empty:
+                        cmp_bar = alt.Chart(long).mark_bar().encode(
+                            x=alt.X("Delta:Q", title="Delta (B−A)"),
+                            y=alt.Y("Catégorie:N", sort='-x'),
+                            color=alt.Color("Type:N", legend=alt.Legend(title="Mesure")),
+                            tooltip=[
+                                alt.Tooltip("Catégorie:N"),
+                                alt.Tooltip("Type:N"),
+                                alt.Tooltip("Delta:Q", format=","),
+                            ],
+                        ).properties(height=320)
+                        st.altair_chart(cmp_bar, use_container_width=True)
+                    else:
+                        st.info("Aucun delta à afficher.")
+        
+                except Exception as e:
+                    st.warning(f"Comparaison : affichage du graphique indisponible ({e}).")
+                    # On n’empêche pas la page de fonctionner — le tableau ci-dessus reste utile.
 
-                st.markdown("#### Comparaison A vs B")
-                st.dataframe(cmp, use_container_width=True)
-
-                # Petite visu des deltas
-                if not cmp.empty:
-                    cmp_bar = alt.Chart(cmp).transform_fold(
-                        ["Δ Coût (B−A)", "Δ Heures (B−A)"],
-                        as_=["Type", "Delta"]
-                    ).mark_bar().encode(
-                        x=alt.X("Delta:Q", title="Delta (B−A)"),
-                        y=alt.Y("Catégorie:N", sort='-x'),
-                        color=alt.Color("Type:N", legend=alt.Legend(title="Mesure")),
-                        tooltip=["Catégorie", "Type", alt.Tooltip("Delta:Q", format=",")]
-                    ).properties(height=320)
-                    st.altair_chart(cmp_bar, use_container_width=True)
 
     # Aide
     with st.expander("ℹ️ Aide & Hypothèses"):
