@@ -54,7 +54,7 @@ def _prepare_calendar(calendar_df: pd.DataFrame) -> pd.DataFrame:
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
     df = df.dropna(subset=['Date']).reset_index(drop=True)
 
-    # Saison présente dans ton modèle
+    # Saison présente dans ton modèle (sinon Standard)
     if 'Saison' not in df.columns:
         df['Saison'] = "Standard"
 
@@ -85,12 +85,11 @@ def _build_suggestions_for_category(df_candidates: pd.DataFrame,
                                     cat: str,
                                     target_hours: float,
                                     step: float,
-                                    max_per_day: float,
-                                    mode: str) -> pd.DataFrame:
+                                    max_per_day: float) -> pd.DataFrame:
     """
     Construit des suggestions pour UNE catégorie.
     - df_candidates doit contenir 'Date','Jour','Saison','Mois_FR' et une colonne 'Heures_base'
-    - mode: 'reduce' ou 'add'
+    - target_hours : peut être >0 (ajouter) ou <0 (réduire)
     """
     required = {'Date', 'Jour', 'Saison', 'Mois_FR', 'Heures_base'}
     missing = required - set(df_candidates.columns)
@@ -98,17 +97,19 @@ def _build_suggestions_for_category(df_candidates: pd.DataFrame,
         raise KeyError(f"Colonnes manquantes pour _build_suggestions_for_category({cat}): {sorted(missing)}")
 
     df = df_candidates.copy()
-    if df.empty or target_hours == 0:
+    if df.empty or abs(target_hours) == 0:
         return pd.DataFrame(columns=[
             'Catégorie', 'Date', 'Jour', 'Saison', 'Mois_FR',
             'Heures_base', 'Ajustement_propose', 'Heures_nouvelles'
         ])
 
+    # Mode par catégorie
+    mode = 'add' if target_hours > 0 else 'reduce'
+    remaining = abs(float(target_hours))
+    sign = 1.0 if mode == 'add' else -1.0
+
     # Tri : pour réduire → jours les plus chargés d’abord ; pour ajouter → les moins chargés
     df = df.sort_values('Heures_base', ascending=(mode == 'add')).reset_index(drop=True)
-
-    remaining = abs(float(target_hours))
-    sign = -1.0 if mode == 'reduce' else 1.0
 
     rows = []
     for _, r in df.iterrows():
@@ -121,8 +122,8 @@ def _build_suggestions_for_category(df_candidates: pd.DataFrame,
         base = float(r['Heures_base'])
         if mode == 'reduce':
             new_val = max(0.0, base - proposed)
-            proposed = base - new_val  # si on touche 0
-            signed = -proposed
+            effective = base - new_val  # ajustement réel si on touche 0
+            signed = -effective
         else:
             new_val = base + proposed
             signed = proposed
@@ -154,7 +155,6 @@ def _categories_available(calendar_df: pd.DataFrame) -> list[str]:
     for c in calendar_df.columns:
         if isinstance(c, str) and c.startswith("Heures_"):
             cats.append(c.replace("Heures_", ""))  # garde le suffixe (la catégorie)
-    # tri : AT d'abord si présent
     cats = sorted(set(cats))
     if "AT" in cats:
         cats.remove("AT")
@@ -162,16 +162,63 @@ def _categories_available(calendar_df: pd.DataFrame) -> list[str]:
     return cats
 
 
+def _get_targets_from_simulator(selected_cats: list[str]) -> dict[str, float] | None:
+    """
+    Lit st.session_state['simulateur_objectif_results'] et en déduit
+    les cibles d'ajustement d'heures par catégorie.
+    Retourne None si indisponible.
+    """
+    sim_df = st.session_state.get("simulateur_objectif_results", pd.DataFrame())
+    if sim_df is None or sim_df.empty:
+        return None
+    if "Catégorie" not in sim_df.columns:
+        return None
+
+    # Cherche une colonne contenant l'ajustement d'heures
+    hour_col = None
+    for c in sim_df.columns:
+        c_low = str(c).lower()
+        if ("ajustement" in c_low or "adjust" in c_low) and ("heure" in c_low or c_low.endswith("(h)") or "h)" in c_low or " hours" in c_low):
+            hour_col = c
+            break
+    if hour_col is None:
+        # fallback : si une colonne ressemble à "Ajustement Heures (h)" ou "Ajustement Heures"
+        for c in sim_df.columns:
+            if "heure" in str(c).lower():
+                hour_col = c
+                break
+    if hour_col is None:
+        return None
+
+    # Agrège par catégorie (certaines versions du simulateur listent plusieurs lignes/cat)
+    pick = sim_df[sim_df['Catégorie'].isin(selected_cats)].copy()
+    if pick.empty:
+        return None
+
+    # Somme par catégorie (positif = ajouter, négatif = réduire)
+    grp = pick.groupby('Catégorie', dropna=True)[hour_col].sum().to_dict()
+
+    # Cast en float & nettoyer les NaN
+    targets = {}
+    for k in selected_cats:
+        v = float(grp.get(k, 0.0)) if grp.get(k, 0.0) is not None else 0.0
+        # Pas de normalisation de signe ici : on respecte le signe par catégorie
+        targets[k] = round(v, 2)
+
+    return targets if any(abs(v) > 0 for v in targets.values()) else None
+
+
 # ============================================================
 # Page
 # ============================================================
 
 def render_besoin_jour_assistant_page():
-    st.title("Assistant Besoin Jour (multi-catégories)")
+    st.title("Assistant Besoin Jour (auto depuis Simulateur)")
     st.markdown(
-        "Génère des **suggestions d’ajustements d’heures** par **catégorie** "
-        "en respectant vos verrous *(mois, saisons, jours)* et des cibles "
-        "qui peuvent venir soit du **Simulateur d’Objectif**, soit d’une **saisie manuelle**."
+        "Génère des **suggestions d’ajustements d’heures par catégorie**.\n\n"
+        "- Si des résultats existent dans **Simulateur d’Objectif**, ils sont **importés automatiquement**.\n"
+        "- Sinon, vous pouvez **saisir manuellement** les cibles d’ajustement (heures) par catégorie.\n"
+        "- Les **verrous** (mois / saisons / jours) s’appliquent à **toutes** les catégories."
     )
 
     # Pré-requis
@@ -194,26 +241,18 @@ def render_besoin_jour_assistant_page():
         st.error("Aucune colonne 'Heures_*' détectée dans le calendar. Impossible de proposer des ajustements.")
         st.stop()
 
-    # ===================== Objectif global & mode =====================
+    # ===================== Paramètres globaux =====================
     with st.container(border=True):
-        st.subheader("Objectif & Paramètres généraux")
-        c1, c2, c3 = st.columns([1, 1, 1])
+        st.subheader("Paramètres d'application")
+        c1, c2 = st.columns([1, 1])
         with c1:
-            mode_label = st.radio(
-                "Type d’ajustement",
-                options=["Réduire des heures", "Ajouter des heures"],
-                index=0, horizontal=True, key="abj_mode"
-            )
-        with c2:
-            # Pas commun pour toutes les catégories (simple et lisible)
             step = st.select_slider("Pas (heures)", options=[0.25, 0.5, 1.0, 2.0], value=0.5)
-        with c3:
+        with c2:
             max_per_day = st.number_input(
                 "Ajustement max par jour (h, par catégorie)",
-                min_value=float(step), max_value=24.0, value=2.0, step=float(step), format="%.2f"
+                min_value=float(step), max_value=24.0,
+                value=2.0, step=float(step), format="%.2f"
             )
-
-        effective_mode = 'reduce' if mode_label.startswith("Réduire") else 'add'
 
     # ===================== Verrous & filtres =====================
     with st.container(border=True):
@@ -242,9 +281,9 @@ def render_besoin_jour_assistant_page():
 
     # ===================== Sélection des catégories =====================
     with st.container(border=True):
-        st.subheader("Catégories concernées")
+        st.subheader("Catégories à ajuster")
         selected_cats = st.multiselect(
-            "Choisissez les catégories sur lesquelles appliquer la cible",
+            "Choisissez les catégories concernées",
             options=cats_all,
             default=[c for c in cats_all if c in ("AT", "ATR", "ATF")] or cats_all[:3],
             key="abj_selected_cats"
@@ -253,79 +292,55 @@ def render_besoin_jour_assistant_page():
             st.info("Sélectionnez au moins une catégorie.")
             st.stop()
 
-    # ===================== Source des cibles par catégorie =====================
-    with st.container(border=True):
-        st.subheader("Cibles d’ajustement par catégorie (heures)")
-        source_mode = st.radio(
-            "Source des cibles :",
-            options=["Depuis le Simulateur (si disponible)", "Saisie manuelle"],
-            index=0, horizontal=True, key="abj_target_source"
-        )
+    # ===================== Cibles : Auto (Simulateur) → fallback Manuel =====================
+    targets_by_cat: dict[str, float] = {c: 0.0 for c in selected_cats}
+    auto_targets = _get_targets_from_simulator(selected_cats)
 
-        targets_by_cat: dict[str, float] = {c: 0.0 for c in selected_cats}
+    if auto_targets is not None:
+        with st.container(border=True):
+            st.subheader("Cibles importées du Simulateur d’Objectif")
+            scale = st.slider(
+                "Facteur d'échelle des cibles du Simulateur",
+                min_value=0.0, max_value=2.0, value=1.0, step=0.05
+            )
+            for cat in selected_cats:
+                targets_by_cat[cat] = round(float(auto_targets.get(cat, 0.0)) * scale, 2)
 
-        if source_mode.startswith("Depuis"):
-            # On attend un DF sauvegardé par le simulateur :
-            # st.session_state["simulateur_objectif_results"] (DataFrame)
-            # Colonnes attendues au minimum :
-            #   'Catégorie' , 'Ajustement Heures (h)'  (positive = ajouter, négative = réduire)
-            sim_df = st.session_state.get("simulateur_objectif_results", pd.DataFrame())
-            if sim_df is None or sim_df.empty or "Catégorie" not in sim_df.columns:
-                st.warning("Aucun résultat du Simulateur trouvé. Passe en saisie manuelle.")
-                source_mode = "Saisie manuelle"
-            else:
-                # Nettoyage colonnes
-                col_h = None
-                for c in sim_df.columns:
-                    if "Ajustement" in c and "Heure" in c:
-                        col_h = c
-                        break
-                if col_h is None:
-                    st.warning("Le tableau du Simulateur ne contient pas de colonne d'ajustement en heures. Passe en saisie manuelle.")
-                    source_mode = "Saisie manuelle"
-                else:
-                    # Filtre sur les catégories retenues
-                    pick = sim_df[sim_df['Catégorie'].isin(selected_cats)].copy()
-                    if pick.empty:
-                        st.warning("Le Simulateur ne contient pas ces catégories. Passe en saisie manuelle.")
-                        source_mode = "Saisie manuelle"
-                    else:
-                        # Option : inverser le signe auto si mode contraire
-                        st.caption("Cibles importées du Simulateur (ajustables ci-dessous).")
-                        scale = st.slider("Facteur d'échelle des cibles du Simulateur", min_value=0.0, max_value=2.0, value=1.0, step=0.05)
-                        for cat in selected_cats:
-                            val = float(pick[pick['Catégorie'] == cat][col_h].sum()) if cat in pick['Catégorie'].values else 0.0
-                            # Harmonise avec le mode sélectionné (Réduire/Ajouter)
-                            if effective_mode == 'reduce':
-                                # on veut un nombre négatif → si positif, on inverse le signe
-                                val = -abs(val)
-                            else:
-                                # on veut un nombre positif
-                                val = abs(val)
-                            targets_by_cat[cat] = round(val * scale, 2)
+            # Aperçu rapide
+            df_preview = pd.DataFrame(
+                [{'Catégorie': c, 'Cible (heures)': targets_by_cat[c]} for c in selected_cats]
+            )
+            st.dataframe(df_preview, hide_index=True, use_container_width=True)
+            st.caption("Astuce : si vous voulez ignorer le Simulateur, mettez le facteur à 0 et utilisez le bloc de saisie manuelle ci-dessous.")
 
-        if source_mode == "Saisie manuelle":
-            # Grille d'inputs
+        # Option de surcouche manuelle (facultative)
+        with st.expander("➕ Surcharge manuelle (facultatif)"):
+            cols = st.columns(min(5, max(1, len(selected_cats))))
+            for i, cat in enumerate(selected_cats):
+                with cols[i % len(cols)]:
+                    add_delta = st.number_input(
+                        f"Δ {cat} (h) (+/-)",
+                        value=0.0, step=1.0, format="%.1f", key=f"abj_manual_overlay_{cat}"
+                    )
+                    targets_by_cat[cat] = round(targets_by_cat[cat] + add_delta, 2)
+    else:
+        with st.container(border=True):
+            st.subheader("Cibles (Saisie manuelle)")
             cols = st.columns(min(5, max(1, len(selected_cats))))
             for i, cat in enumerate(selected_cats):
                 with cols[i % len(cols)]:
                     targets_by_cat[cat] = st.number_input(
-                        f"{cat} (h) {'à retirer' if effective_mode=='reduce' else 'à ajouter'}",
+                        f"{cat} (h)  (+ = ajouter,  − = réduire)",
                         value=0.0, step=1.0, format="%.1f", key=f"abj_manual_target_{cat}"
                     )
-                    # Harmonise le signe avec le mode
-                    if effective_mode == 'reduce':
-                        targets_by_cat[cat] = -abs(targets_by_cat[cat])
-                    else:
-                        targets_by_cat[cat] = abs(targets_by_cat[cat])
 
-        # Résumé
-        total_target = sum(targets_by_cat.values())
-        st.metric("Cible totale (toutes catégories)", f"{total_target:+.1f} h")
+    # Résumé total
+    total_target = sum(targets_by_cat.values())
+    st.metric("Cible totale (toutes catégories)", f"{total_target:+.1f} h")
 
     # ===================== Génération des suggestions =====================
     with st.container(border=True):
-        st.subheader("Suggestions d’ajustements (par catégorie)")
+        st.subheader("Suggestions d’ajustements")
 
         all_suggestions = []
         for cat in selected_cats:
@@ -336,16 +351,13 @@ def render_besoin_jour_assistant_page():
             # Prépare un DF candidats avec Heures_base = Heures_{cat}
             dfc = candidates_common.copy()
             dfc['Heures_base'] = _hours_series_for_category(bs['calendar_df'], cat)
-            # On enlève les jours où la base est NaN (déjà 0.0) → ok
 
-            mode_cat = 'reduce' if target_cat < 0 else 'add'
             out = _build_suggestions_for_category(
                 df_candidates=dfc[['Date', 'Jour', 'Saison', 'Mois_FR', 'Heures_base']],
                 cat=cat,
-                target_hours=abs(target_cat),
+                target_hours=target_cat,           # signe respecté par catégorie
                 step=float(step),
                 max_per_day=float(max_per_day),
-                mode=mode_cat
             )
             if not out.empty:
                 all_suggestions.append(out)
@@ -395,24 +407,20 @@ def render_besoin_jour_assistant_page():
             key="dl_sugg_all"
         )
 
-        # Export par catégorie (facultatif, pratique)
         with st.expander("Exports par catégorie"):
             cats_in_results = suggestions['Catégorie'].dropna().unique().tolist()
             for cat in cats_in_results:
                 dfc = suggestions[suggestions['Catégorie'] == cat].copy()
-                btn_key = f"dl_{cat}_csv"
                 st.download_button(
                     f"Exporter {cat} (CSV)",
                     data=dfc.to_csv(index=False).encode('utf-8'),
                     file_name=f"suggestions_{cat}_{year}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    key=btn_key
+                    key=f"dl_{cat}_csv"
                 )
 
-    # Astuce finale
     st.caption(
         "💡 Applique ces propositions manuellement dans **Besoin Jour**. "
-        "Si tu veux que je génère directement les *ops JSON* prêtes à injecter dans `_apply_ops_to_grid`, "
-        "dis-moi le format exact (clé, structure) et je te fournis l’export prêt à coller."
+        "Si tu veux un export d’**ops JSON** prêtes à injecter, dis-moi le format attendu et je le produis."
     )
