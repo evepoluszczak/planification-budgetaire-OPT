@@ -342,6 +342,108 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
     return b"", "bin", "application/octet-stream"
 
 
+def _import_scenario_from_file(uploaded_file) -> dict | None:
+    """
+    Importe un scénario depuis un fichier Excel ou CSV exporté.
+    Retourne un dict avec: {
+        'target_adjustment': float,
+        'distribution': dict[str, float],
+        'rounding': str,
+        'cap_pct': float,
+        'results': pd.DataFrame
+    }
+    Retourne None en cas d'erreur.
+    """
+    try:
+        filename = uploaded_file.name.lower()
+
+        if filename.endswith('.xlsx') or filename.endswith('.xls'):
+            # Lire le fichier Excel (3 feuilles attendues)
+            excel_file = pd.ExcelFile(uploaded_file)
+
+            # Feuille 1: Résultats
+            if "Résultats" in excel_file.sheet_names:
+                results_df = pd.read_excel(excel_file, sheet_name="Résultats")
+            else:
+                st.error("Feuille 'Résultats' introuvable dans le fichier Excel.")
+                return None
+
+            # Feuille 2: Hypothèses
+            if "Hypothèses" in excel_file.sheet_names:
+                hyp_df = pd.read_excel(excel_file, sheet_name="Hypothèses")
+                target_adjustment = float(hyp_df.iloc[0]["Objectif (CHF)"])
+                rounding = str(hyp_df.iloc[0]["Arrondi"])
+                cap_pct = float(hyp_df.iloc[0]["Cap (%)"])
+            else:
+                st.warning("Feuille 'Hypothèses' introuvable. Valeurs par défaut utilisées.")
+                target_adjustment = 0.0
+                rounding = "Au plus proche"
+                cap_pct = 100.0
+
+            # Feuille 3: Répartition
+            if "Répartition" in excel_file.sheet_names:
+                distrib_df = pd.read_excel(excel_file, sheet_name="Répartition")
+                distribution = {
+                    str(row["Catégorie"]): float(row["Part (%)"])
+                    for _, row in distrib_df.iterrows()
+                }
+            else:
+                st.warning("Feuille 'Répartition' introuvable. Reconstruction depuis Résultats.")
+                distribution = {
+                    str(row["Catégorie"]): float(row.get("Part Répartition (%)", 0))
+                    for _, row in results_df.iterrows()
+                }
+
+        elif filename.endswith('.csv'):
+            # Lire CSV (contient uniquement les résultats)
+            results_df = pd.read_csv(uploaded_file)
+
+            # Reconstruire les métadonnées depuis les résultats
+            if "Part Répartition (%)" in results_df.columns:
+                distribution = {
+                    str(row["Catégorie"]): float(row["Part Répartition (%)"])
+                    for _, row in results_df.iterrows()
+                }
+            else:
+                st.error("Colonne 'Part Répartition (%)' introuvable dans le CSV.")
+                return None
+
+            # Calculer target_adjustment depuis les résultats
+            if "Ajustement Coût (CHF)" in results_df.columns:
+                target_adjustment = float(results_df["Ajustement Coût (CHF)"].sum())
+            else:
+                st.error("Colonne 'Ajustement Coût (CHF)' introuvable dans le CSV.")
+                return None
+
+            # Valeurs par défaut pour les autres paramètres
+            rounding = "Au plus proche"
+            cap_pct = 100.0
+            st.info("Format CSV détecté. Hypothèses par défaut: Arrondi='Au plus proche', Cap=100%")
+
+        else:
+            st.error(f"Format de fichier non supporté: {filename}. Utilisez .xlsx, .xls ou .csv")
+            return None
+
+        # Validation des résultats
+        required_cols = ["Catégorie", "Part Répartition (%)", "Ajustement Coût (CHF)"]
+        missing_cols = [col for col in required_cols if col not in results_df.columns]
+        if missing_cols:
+            st.error(f"Colonnes manquantes dans le fichier: {', '.join(missing_cols)}")
+            return None
+
+        return {
+            'target_adjustment': target_adjustment,
+            'distribution': distribution,
+            'rounding': rounding,
+            'cap_pct': cap_pct,
+            'results': results_df
+        }
+
+    except Exception as e:
+        st.error(f"Erreur lors de l'import du fichier: {e}")
+        return None
+
+
 def _auto_create_ajustement_propose(results_df: pd.DataFrame,
                                      target_adjustment: float) -> None:
     """
@@ -743,6 +845,45 @@ def render_simulateur_objectif_page():
                 file_name=f"simulateur_objectif_{sc_name}.{ext}",
                 mime=mime
             )
+
+        # ==== Import de scénario ====
+        st.markdown("**Charger un scénario depuis un fichier**")
+        uploaded_file = st.file_uploader(
+            "📁 Sélectionner un fichier de scénario (Excel ou CSV)",
+            type=["xlsx", "xls", "csv"],
+            key="scenario_uploader",
+            help="Chargez un scénario exporté précédemment pour le réutiliser"
+        )
+
+        if uploaded_file is not None:
+            if st.button("⬆️ Charger ce scénario", key="load_scenario_btn"):
+                imported_data = _import_scenario_from_file(uploaded_file)
+
+                if imported_data:
+                    # Restaurer les paramètres dans session_state
+                    st.session_state.sim_target_adjustment = imported_data['target_adjustment']
+                    st.session_state.sim_target_percent = (
+                        imported_data['target_adjustment'] / base_cost_total * 100.0
+                        if base_cost_total > 0 else 0.0
+                    )
+
+                    # Restaurer la distribution dans les widgets
+                    for cat, pct in imported_data['distribution'].items():
+                        st.session_state[f"distrib_pct_{cat}"] = float(pct)
+
+                    # Restaurer les résultats et métadonnées
+                    _save_simulator_results_to_session(
+                        results_df=imported_data['results'],
+                        target_adjustment=imported_data['target_adjustment'],
+                        distribution_pct=imported_data['distribution'],
+                        rounding=imported_data['rounding'],
+                        cap_pct=imported_data['cap_pct']
+                    )
+
+                    st.success(f"✅ Scénario chargé avec succès ! Objectif: {imported_data['target_adjustment']:,.0f} CHF")
+                    st.rerun()
+
+        st.divider()
 
         # === Comparaison de scénarios (robuste) ===
         scen_keys = list(st.session_state.get("sim_scenarios", {}).keys())
