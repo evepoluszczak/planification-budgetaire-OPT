@@ -53,3 +53,7 @@ input_files/*
 
 # Logs
 *.log
+
+# Sauvegardes automatiques
+autosave_session.json
+autosaves/
