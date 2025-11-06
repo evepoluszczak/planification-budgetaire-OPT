@@ -39,6 +39,61 @@ def render_comparaison_historique_page():
     fc_min = st.session_state.pax_forecast_min_date
     fc_max = st.session_state.pax_forecast_max_date
 
+    # === BRIDGE – publication PAX dans session_state (Option A) ====================
+    # Objectif: exposer des clés standardisées que d'autres pages/assistants consomment.
+    # - st.session_state['pax_30min'] : DataFrame 30' (forecast), index datetime
+    # - st.session_state['pax_daily'] : DataFrame daily (forecast) avec colonnes [Date, Pax_Total]
+    
+    def _daily_from_30min(df_30, flux="Tous"):
+        """Agrège un DF indexé en datetime (30') en quotidien avec Pax_Total."""
+        if not isinstance(df_30, pd.DataFrame) or df_30.empty:
+            return pd.DataFrame(columns=["Date", "Pax_Total"])
+    
+        df = df_30.copy()
+    
+        # Assurer un index datetime
+        if "DateTime" in df.columns:
+            df["DateTime"] = pd.to_datetime(df["DateTime"], errors="coerce")
+            df = df.dropna(subset=["DateTime"]).set_index("DateTime")
+        if not isinstance(df.index, pd.DatetimeIndex):
+            try:
+                df.index = pd.to_datetime(df.index)
+            except Exception:
+                return pd.DataFrame(columns=["Date", "Pax_Total"])
+    
+        # Colonnes candidates (on prend ce qui existe)
+        cand_A = [c for c in ["Pax_Schengen_A", "Pax_NonSchengen_A", "PAX_A", "Pax_A", "Arrivals"] if c in df.columns]
+        cand_D = [c for c in ["Pax_Schengen_D", "Pax_NonSchengen_D", "PAX_D", "Pax_D", "Departures"] if c in df.columns]
+    
+        if flux == "Arrivée" and cand_A:
+            s = df[cand_A].sum(axis=1)
+        elif flux == "Départ" and cand_D:
+            s = df[cand_D].sum(axis=1)
+        else:
+            # Tous = somme arrivées + départs si dispo, sinon ce qui existe
+            sA = df[cand_A].sum(axis=1) if cand_A else None
+            sD = df[cand_D].sum(axis=1) if cand_D else None
+            if sA is not None and sD is not None:
+                s = sA.add(sD, fill_value=0)
+            else:
+                s = (sA if sA is not None else 0) + (sD if sD is not None else 0)
+    
+        # Agrégat quotidien
+        daily = s.groupby(s.index.normalize()).sum()
+        out = pd.DataFrame({"Date": daily.index, "Pax_Total": daily.values})
+        out["Date"] = pd.to_datetime(out["Date"]).dt.normalize()
+        return out
+    
+    # Publier la série 30' forecast (utile aux assistants qui consomment brut 30')
+    if isinstance(fc_data, pd.DataFrame) and not fc_data.empty:
+        st.session_state["pax_30min"] = fc_data.copy()
+    
+        # Publier l'agrégat quotidien forecast (clé attendue par l'assistant Besoin Jour)
+        df_pax_daily = _daily_from_30min(fc_data, flux="Tous")
+        if not df_pax_daily.empty:
+            st.session_state["pax_daily"] = df_pax_daily.copy()
+    # ============================================================================== 
+
     # Calcul de la date historique par défaut
     default_forecast_date = fc_min
     default_historical_date = hist_max
