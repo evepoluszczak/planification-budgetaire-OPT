@@ -439,6 +439,180 @@ def _get_next_slot(slot: str) -> str:
         return slot
 
 
+def consolidate_suggestions(suggestions: List[Suggestion]) -> List[Suggestion]:
+    """
+    Regroupe les suggestions consécutives pour simplifier l'affichage et l'application
+
+    Étape 1: Regroupe les créneaux consécutifs pour même (date, périmètre)
+    Étape 2: Regroupe les périmètres pour même (date, plage_horaire)
+
+    Args:
+        suggestions: Liste de suggestions brutes
+
+    Returns:
+        Liste de suggestions consolidées
+    """
+    if not suggestions:
+        return suggestions
+
+    from datetime import datetime, timedelta
+
+    # Trier par date, périmètre, puis slot_indices
+    suggestions_sorted = sorted(
+        suggestions,
+        key=lambda s: (s.date, s.perimetre, min(s.slot_indices) if s.slot_indices else 0)
+    )
+
+    # Étape 1: Regrouper créneaux consécutifs par (date, périmètre)
+    consolidated_step1 = []
+    current_group = None
+
+    for sugg in suggestions_sorted:
+        if current_group is None:
+            # Première suggestion
+            current_group = {
+                'date': sugg.date,
+                'perimetre': sugg.perimetre,
+                'categorie': sugg.categorie,
+                'delta_hours': sugg.delta_hours,
+                'delta_chf': sugg.delta_chf,
+                'score': sugg.score,
+                'motifs': sugg.motifs.copy(),
+                'conflits': sugg.conflits.copy(),
+                'slot_indices': sugg.slot_indices.copy() if sugg.slot_indices else [],
+                'start_time': sugg.periode.split('-')[0],
+                'end_time': sugg.periode.split('-')[1]
+            }
+        else:
+            # Vérifier si consécutif
+            same_date_perimetre = (
+                sugg.date == current_group['date'] and
+                sugg.perimetre == current_group['perimetre']
+            )
+
+            # Vérifier si les slots sont consécutifs
+            consecutive = False
+            if same_date_perimetre and sugg.slot_indices and current_group['slot_indices']:
+                last_slot_idx = max(current_group['slot_indices'])
+                first_new_slot_idx = min(sugg.slot_indices)
+                consecutive = (first_new_slot_idx == last_slot_idx + 1)
+
+            if same_date_perimetre and consecutive:
+                # Fusionner avec le groupe actuel
+                current_group['delta_hours'] += sugg.delta_hours
+                current_group['delta_chf'] += sugg.delta_chf
+                current_group['score'] = max(current_group['score'], sugg.score)  # Garder meilleur score
+                current_group['slot_indices'].extend(sugg.slot_indices)
+                current_group['end_time'] = sugg.periode.split('-')[1]
+
+                # Fusionner motifs uniques
+                for motif in sugg.motifs:
+                    if motif not in current_group['motifs']:
+                        current_group['motifs'].append(motif)
+                for conflit in sugg.conflits:
+                    if conflit not in current_group['conflits']:
+                        current_group['conflits'].append(conflit)
+            else:
+                # Créer suggestion consolidée du groupe précédent
+                consolidated_step1.append(Suggestion(
+                    date=current_group['date'],
+                    periode=f"{current_group['start_time']}-{current_group['end_time']}",
+                    perimetre=current_group['perimetre'],
+                    categorie=current_group['categorie'],
+                    delta_hours=current_group['delta_hours'],
+                    delta_chf=current_group['delta_chf'],
+                    score=current_group['score'],
+                    motifs=current_group['motifs'],
+                    conflits=current_group['conflits'],
+                    slot_indices=current_group['slot_indices']
+                ))
+
+                # Commencer nouveau groupe
+                current_group = {
+                    'date': sugg.date,
+                    'perimetre': sugg.perimetre,
+                    'categorie': sugg.categorie,
+                    'delta_hours': sugg.delta_hours,
+                    'delta_chf': sugg.delta_chf,
+                    'score': sugg.score,
+                    'motifs': sugg.motifs.copy(),
+                    'conflits': sugg.conflits.copy(),
+                    'slot_indices': sugg.slot_indices.copy() if sugg.slot_indices else [],
+                    'start_time': sugg.periode.split('-')[0],
+                    'end_time': sugg.periode.split('-')[1]
+                }
+
+    # Ajouter le dernier groupe
+    if current_group:
+        consolidated_step1.append(Suggestion(
+            date=current_group['date'],
+            periode=f"{current_group['start_time']}-{current_group['end_time']}",
+            perimetre=current_group['perimetre'],
+            categorie=current_group['categorie'],
+            delta_hours=current_group['delta_hours'],
+            delta_chf=current_group['delta_chf'],
+            score=current_group['score'],
+            motifs=current_group['motifs'],
+            conflits=current_group['conflits'],
+            slot_indices=current_group['slot_indices']
+        ))
+
+    # Étape 2: Regrouper par (date, plage_horaire) pour fusionner les périmètres
+    # Grouper par date et période
+    period_groups = {}
+    for sugg in consolidated_step1:
+        key = (sugg.date, sugg.periode)
+        if key not in period_groups:
+            period_groups[key] = []
+        period_groups[key].append(sugg)
+
+    consolidated_final = []
+    for (date_val, periode), group in period_groups.items():
+        if len(group) == 1:
+            # Un seul périmètre, garder tel quel
+            consolidated_final.append(group[0])
+        else:
+            # Plusieurs périmètres, fusionner
+            perimetres = [s.perimetre for s in group]
+            total_delta_hours = sum(s.delta_hours for s in group)
+            total_delta_chf = sum(s.delta_chf for s in group)
+            avg_score = sum(s.score for s in group) / len(group)
+
+            all_motifs = []
+            all_conflits = []
+            all_slot_indices = []
+            for s in group:
+                all_motifs.extend(s.motifs)
+                all_conflits.extend(s.conflits)
+                if s.slot_indices:
+                    all_slot_indices.extend(s.slot_indices)
+
+            # Dédupliquer
+            all_motifs = list(dict.fromkeys(all_motifs))
+            all_conflits = list(dict.fromkeys(all_conflits))
+
+            # Créer périmètre groupé
+            perimetre_str = ", ".join(perimetres)
+
+            consolidated_final.append(Suggestion(
+                date=date_val,
+                periode=periode,
+                perimetre=perimetre_str,
+                categorie=group[0].categorie,
+                delta_hours=total_delta_hours,
+                delta_chf=total_delta_chf,
+                score=avg_score,
+                motifs=all_motifs,
+                conflits=all_conflits,
+                slot_indices=list(set(all_slot_indices)) if all_slot_indices else None
+            ))
+
+    # Re-trier par date et période
+    consolidated_final.sort(key=lambda s: (s.date, s.periode))
+
+    return consolidated_final
+
+
 def generate_suggestions(
     ajustement: AjustementPropose,
     config: SuggestionConfig,
@@ -542,16 +716,28 @@ def generate_suggestions(
         hourly_rate=hourly_rate
     )
 
-    # Diagnostic final
+    # Diagnostic avant consolidation
+    nb_suggestions_brutes = len(suggestions)
     if suggestions:
-        total_h = sum(s.delta_hours for s in suggestions)
-        total_c = sum(s.delta_chf for s in suggestions)
-        diagnostics.append(("success", f"{len(suggestions)} suggestion(s) générée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF"))
+        total_h_brut = sum(s.delta_hours for s in suggestions)
+        total_c_brut = sum(s.delta_chf for s in suggestions)
+        diagnostics.append(("info", f"{nb_suggestions_brutes} suggestion(s) brute(s) générée(s) : {total_h_brut:+.1f}h / {total_c_brut:+.0f} CHF"))
     else:
         diagnostics.append(("warning", f"L'algorithme greedy n'a généré aucune suggestion. L'objectif ({delta_hours:+.1f}h) est peut-être trop ambitieux pour la période analysée."))
+        st.session_state.suggestions_diagnostics = diagnostics
+        results[category] = suggestions
+        return results
+
+    # 5. Consolider les suggestions (regrouper créneaux consécutifs et périmètres)
+    suggestions_consolidated = consolidate_suggestions(suggestions)
+
+    # Diagnostic final après consolidation
+    total_h = sum(s.delta_hours for s in suggestions_consolidated)
+    total_c = sum(s.delta_chf for s in suggestions_consolidated)
+    diagnostics.append(("success", f"{len(suggestions_consolidated)} suggestion(s) consolidée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF (regroupées depuis {nb_suggestions_brutes} suggestions brutes)"))
 
     st.session_state.suggestions_diagnostics = diagnostics
-    results[category] = suggestions
+    results[category] = suggestions_consolidated
 
     return results
 
@@ -584,17 +770,20 @@ def apply_suggestions(
             continue
 
         # Déterminer valeur (0 pour retrait, 1 pour ajout)
-        # Note: En V1, on ne fait que des retraits
         value = 0 if sugg.delta_hours < 0 else 1
 
-        # Créer règle
+        # Gérer périmètres groupés (séparés par ", ")
+        # Ex: "Arrivée Schengen, Départ Schengen" → ["Arrivée Schengen", "Départ Schengen"]
+        perimetres_list = [p.strip() for p in sugg.perimetre.split(',')]
+
+        # Créer une règle groupée avec tous les périmètres
         rule = {
             'category': category,
             'start': sugg.date,
             'end': sugg.date,
             'jours': [],  # Pas de filtre jour
             'saisons': [],  # Pas de filtre saison
-            'rows': [sugg.perimetre],
+            'rows': perimetres_list,  # Liste de périmètres
             'start_col': start_time,
             'end_col': end_time,
             'value': value
