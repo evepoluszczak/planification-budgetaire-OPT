@@ -1,11 +1,13 @@
 # ui/pages/simulateur_objectif.py
 """
 Page Simulateur Objectif - Simulation d'objectifs de coût (améliorée)
+- Montant (CHF) OU Pourcentage (%)
 - Presets d'objectif (+/- 2/5/10 %)
 - Auto-répartition (équitable, pro-rata planifié, pro-rata coût horaire)
 - Verrouillage de catégories, cap par catégorie, arrondi configurable
 - Visualisations (barres triées + pseudo-waterfall)
 - Scénarios (enregistrer, comparer, exporter)
+- Export XLSX avec fallback (openpyxl), sinon CSV
 """
 from __future__ import annotations
 
@@ -172,21 +174,19 @@ def _weights_from_calendar_costs() -> dict[str, float]:
         return _weights_equitable()
 
     rates, _ = _hourly_rates_by_category()
-    # Tente d'utiliser des colonnes 'Coût_<cat>' si elles existent
-    has_cost_cols = any([f"Coût_{c}" in cal.columns for c in cats])
+    has_cost_cols = any([f"Coût_{c}" in cal.columns for c in cats]) or any([f"Coût_{c}".replace("Coût_", "Coût_") in cal.columns for c in cats])
 
     weights = {}
     for c in cats:
-        if has_cost_cols and f"Coût_{c}" in cal.columns:
-            v = _safe_to_float(cal[f"Coût_{c}"].sum(), 0.0)
+        col_cost = f"Coût_{c}"
+        if has_cost_cols and col_cost in cal.columns:
+            v = _safe_to_float(cal[col_cost].sum(), 0.0)
         else:
-            # fallback heuristique: heures * tarif
             h_col = f"Heures_{c}"
             h = _safe_to_float(cal[h_col].sum(), 0.0) if h_col in cal.columns else 0.0
             v = h * _safe_to_float(rates.get(c, 0.0), 0.0)
         weights[c] = max(0.0, v)
 
-    # Normalisation
     total = sum(weights.values())
     if total <= 0:
         return _weights_equitable()
@@ -194,58 +194,50 @@ def _weights_from_calendar_costs() -> dict[str, float]:
 
 
 def _weights_from_hourly_rates() -> dict[str, float]:
-    """
-    Pro-rata des coûts horaires (cat plus chère = plus de poids).
-    """
+    """Pro-rata des coûts horaires (cat plus chère = plus de poids)."""
     rates, _ = _hourly_rates_by_category()
-    # si tous 0 → équitable
     total = sum([max(0.0, r) for r in rates.values()])
     if total <= 0:
         return _weights_equitable()
     return {c: max(0.0, r) / total for c, r in rates.items()}
 
 
-def _normalize_distribution(pcts: dict[str, float], locked: set[str]) -> dict[str, float]:
+def _apply_cap_and_normalize(pcts: dict[str, float], cap_pct: float, locked: set[str]) -> dict[str, float]:
     """
-    Normalise pour total 100%, sans toucher aux catégories verrouillées
-    (leurs % sont conservés tels quels).
+    Applique un cap (%) et renormalise à 100% en EXCLUANT les catégories verrouillées.
+    - Les catégories verrouillées sont forcées à 0% et jamais renormalisées.
+    - Tout le 100% est réparti entre les catégories non verrouillées.
     """
-    cats = _get_all_categories()
-    fixed = sum([pcts.get(c, 0.0) for c in cats if c in locked])
-    free = [c for c in cats if c not in locked]
+    # 1) Verrou = 0
+    out = {c: (0.0 if c in locked else max(0.0, p)) for c, p in pcts.items()}
 
-    remaining = max(0.0, 100.0 - fixed)
-    current_free_total = sum([pcts.get(c, 0.0) for c in free])
+    # 2) Espace libre = catégories non verrouillées
+    free = [c for c in out.keys() if c not in locked]
+    if not free:
+        return out  # tout verrouillé -> tout à 0
 
-    if current_free_total <= 0:
-        # tout le restant équitablement entre free
-        if free:
-            eq = remaining / len(free)
-            for c in free:
-                pcts[c] = round(eq, 1)
-        return pcts
+    # 3) Cap sur les "free"
+    if cap_pct < 100.0:
+        for c in free:
+            out[c] = min(out[c], cap_pct)
 
-    ratio = remaining / current_free_total
+    # 4) Renormalisation des "free" vers 100%
+    total_free = sum(out[c] for c in free)
+    if total_free <= 0:
+        # Si l'utilisateur a mis 0 partout, on répartit équitablement entre free
+        eq = 100.0 / len(free)
+        for c in free:
+            out[c] = round(eq, 1)
+        return out
+
     for c in free:
-        pcts[c] = round(pcts.get(c, 0.0) * ratio, 1)
-    return pcts
+        out[c] = round(out[c] / total_free * 100.0, 1)
 
+    # locked restent à 0
+    for c in locked:
+        out[c] = 0.0
 
-def _apply_cap_on_target_shares(pcts: dict[str, float], cap_pct: float) -> dict[str, float]:
-    """
-    Applique un cap (max %) par catégorie sur la PART de l'objectif (et renormalise).
-    """
-    if cap_pct >= 100.0:
-        return pcts
-
-    # Cap
-    capped = {c: min(v, cap_pct) for c, v in pcts.items()}
-    total = sum(capped.values())
-    if total <= 0:
-        return pcts  # rien à répartir
-
-    # Renormalise à 100%
-    return {c: round(v / total * 100.0, 1) for c, v in capped.items()}
+    return out
 
 
 def _round_value(val: float, mode: str) -> float:
@@ -260,9 +252,7 @@ def _results_table(target_adjustment: float,
                    distrib_pct: dict[str, float],
                    hourly_rates: dict[str, float],
                    rounding: str) -> pd.DataFrame:
-    """
-    Construit la table résultat (par catégorie).
-    """
+    """Construit la table résultat (par catégorie)."""
     rows = []
     total_pct = sum(distrib_pct.values()) or 1.0
     for cat, pct in distrib_pct.items():
@@ -285,38 +275,67 @@ def _results_table(target_adjustment: float,
             "Ajustement Heures (h)": float(hours) if pd.notna(hours) else None
         })
     df = pd.DataFrame(rows)
-    # n'affiche pas les 0% pour plus de lisibilité
     df = df[df["Part Répartition (%)"] > 0].copy()
-    # tri par impact coût desc
     df = df.sort_values("Ajustement Coût (CHF)", ascending=False)
     return df
 
 
-def _export_scenario_excel(scen_name: str, scen_payload: dict) -> bytes:
-    """Crée un fichier Excel en mémoire pour un scénario."""
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="xlsxwriter") as xw:
+def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, str, str]:
+    """
+    Tente d'exporter en XLSX (xlsxwriter, puis openpyxl en fallback).
+    Si les deux moteurs ne sont pas dispo, exporte un CSV de secours.
+    Retourne: (bytes, extension, mime)
+    """
+    def _build_writer(writer):
         # Résultats
         if "results" in scen_payload and isinstance(scen_payload["results"], pd.DataFrame):
-            scen_payload["results"].to_excel(xw, sheet_name="Résultats", index=False)
+            scen_payload["results"].to_excel(writer, sheet_name="Résultats", index=False)
+
         # Hypothèses
         hyp = {
             "Objectif (CHF)": [scen_payload.get("target_adjustment", 0.0)],
             "Arrondi": [scen_payload.get("rounding", "")],
             "Cap (%)": [scen_payload.get("cap_pct", 100.0)],
         }
-        df_hyp = pd.DataFrame(hyp)
-        df_hyp.to_excel(xw, sheet_name="Hypothèses", index=False)
+        pd.DataFrame(hyp).to_excel(writer, sheet_name="Hypothèses", index=False)
 
         # Répartition
         distrib = scen_payload.get("distribution", {})
         if isinstance(distrib, dict) and distrib:
-            df_distrib = pd.DataFrame(
-                [{"Catégorie": k, "Part (%)": v} for k, v in distrib.items()]
-            )
-            df_distrib.to_excel(xw, sheet_name="Répartition", index=False)
-    out.seek(0)
-    return out.read()
+            df_distrib = pd.DataFrame([{"Catégorie": k, "Part (%)": v} for k, v in distrib.items()])
+            df_distrib.to_excel(writer, sheet_name="Répartition", index=False)
+
+    # 1) Essai avec xlsxwriter
+    try:
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="xlsxwriter") as xw:
+            _build_writer(xw)
+        out.seek(0)
+        return out.read(), "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    except Exception:
+        pass
+
+    # 2) Fallback openpyxl
+    try:
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as xw:
+            _build_writer(xw)
+        out.seek(0)
+        return out.read(), "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    except Exception:
+        pass
+
+    # 3) Ultime fallback CSV (exporte uniquement la feuille 'Résultats')
+    try:
+        results = scen_payload.get("results")
+        if isinstance(results, pd.DataFrame) and not results.empty:
+            csv_bytes = results.to_csv(index=False).encode("utf-8")
+            return csv_bytes, "csv", "text/csv"
+    except Exception:
+        pass
+
+    st.error("Impossible de générer un fichier d’export (XLSX/CSV).")
+    return b"", "bin", "application/octet-stream"
 
 
 # =========================
@@ -329,7 +348,7 @@ def render_simulateur_objectif_page():
     st.title("Simulateur d'Objectif de Coût")
     st.markdown(
         "Simulez l'impact en heures d'un **ajustement de coût global** (augmentation/réduction) "
-        "en le répartissant sur les catégories. *Ce simulateur n’applique pas de règles Besoin Jour.*"
+        "en le répartissant sur les catégories. *Ce simulateur n’applique pas les règles Besoin Jour.*"
     )
 
     # Pré-requis : Budget généré
@@ -352,20 +371,24 @@ def render_simulateur_objectif_page():
         with colp1:
             if st.button("−2%"):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
+                st.session_state.sim_target_percent = -2.0
         with colp2:
             if st.button("−5%"):
                 st.session_state.sim_target_adjustment = round(-0.05 * base_cost_total, 0)
+                st.session_state.sim_target_percent = -5.0
         with colp3:
             if st.button("−10%"):
                 st.session_state.sim_target_adjustment = round(-0.10 * base_cost_total, 0)
+                st.session_state.sim_target_percent = -10.0
         with colp4:
             if st.button("+2%"):
                 st.session_state.sim_target_adjustment = round(+0.02 * base_cost_total, 0)
+                st.session_state.sim_target_percent = +2.0
         with colp5:
             if st.button("Réinitialiser"):
                 st.session_state.sim_target_adjustment = 0.0
                 st.session_state.sim_target_percent = 0.0
-        
+
         # ==== Mode d'objectif : CHF ou % ====
         mode_obj = st.radio(
             "Mode d'objectif",
@@ -373,7 +396,7 @@ def render_simulateur_objectif_page():
             horizontal=True,
             key="sim_mode_objectif",
         )
-        
+
         if mode_obj == "Montant (CHF)":
             target_adjustment = st.number_input(
                 "Objectif d'ajustement (CHF — négatif pour réduire)",
@@ -384,7 +407,7 @@ def render_simulateur_objectif_page():
                 help="Saisir un montant total à répartir entre les catégories (ex: -150000 pour réduire de 150k).",
             )
         else:
-            # % manuel de l’utilisateur, appliqué à la base (avec formation)
+            # % manuel appliqué à la base (avec formation)
             target_percent = st.number_input(
                 "Objectif d'ajustement (%) — négatif pour réduire",
                 value=_safe_to_float(st.session_state.get("sim_target_percent", 0.0), 0.0),
@@ -395,6 +418,7 @@ def render_simulateur_objectif_page():
             )
             target_adjustment = round(base_cost_total * (target_percent / 100.0), 0)
 
+        st.divider()
 
         # ==== Stratégies d'auto-répartition ====
         st.markdown("**Remplissage automatique de la répartition (%)**")
@@ -439,11 +463,10 @@ def render_simulateur_objectif_page():
                                       help="Limite la part maximale de l'objectif assignable à une catégorie.")
         with col_opt3:
             locked_cats = st.multiselect("Verrouiller des catégories (inchangées)",
-                                         options=cats, default=[], help="Les % verrouillés ne seront pas renormalisés.")
+                                         options=cats, default=[], help="Les % verrouillés restent à 0% et ne sont jamais renormalisés.")
 
         # ==== Saisie des pourcentages ====
         distrib_pct = {}
-        total_pct = 0.0
         cols_per_row = 5
         n_rows = (len(cats) + cols_per_row - 1) // cols_per_row
         it = iter(cats)
@@ -459,27 +482,21 @@ def render_simulateur_objectif_page():
                                       min_value=0.0, max_value=100.0, step=1.0,
                                       key=key, format="%.1f")
                 distrib_pct[c] = _safe_to_float(val, 0.0)
-                total_pct += distrib_pct[c]
-
-        # Bandeau d’état
-        rates, missing_rates = _hourly_rates_by_category()
-        st.info(
-            f"État: Répartition={total_pct:.1f}% | Arrondi={rounding} | Cap={cap_pct:.0f}% | "
-            f"Catégories sans tarif: {len(missing_rates)}"
-        )
-        if missing_rates:
-            st.warning("Vérifiez les tarifs dans **Configuration → Personnel** : " + ", ".join(missing_rates))
 
         # Normalisations (verrous + cap + 100%)
-        # 1) Applique cap
-        distrib_pct = _apply_cap_on_target_shares(distrib_pct, cap_pct)
-        # 2) Renormalise à 100% en respectant les verrous
-        distrib_pct = _normalize_distribution(distrib_pct, set(locked_cats))
+        distrib_pct = _apply_cap_and_normalize(distrib_pct, cap_pct, set(locked_cats))
         total_pct = sum(distrib_pct.values())
 
+        # Bandeau d’état (après normalisation)
+        rates, missing_rates = _hourly_rates_by_category()
+        st.info(
+            f"État: Répartition normalisée={total_pct:.1f}% | Arrondi={rounding} | Cap={cap_pct:.0f}% | "
+            f"Catégories verrouillées: {len(locked_cats)} | Sans tarif: {len(missing_rates)}"
+        )
+        if missing_rates:
+            st.warning("Tarifs manquants/invalides dans **Configuration → Personnel** : " + ", ".join(missing_rates))
         if abs(total_pct - 100.0) > 0.1:
-            st.warning(f"Le total des pourcentages est **{total_pct:.1f}%**. "
-                       f"Il devrait être de 100%. La normalisation automatique est appliquée.")
+            st.warning(f"Le total est **{total_pct:.1f}%**. La normalisation automatique a été appliquée.")
 
         st.divider()
 
@@ -511,7 +528,6 @@ def render_simulateur_objectif_page():
         with colg2:
             st.metric("Budget après ajustement", f"{new_total:,.0f} CHF")
         with colg3:
-            # total heures simulées (ignore NaN)
             tot_hours = results_df["Ajustement Heures (h)"].fillna(0).sum()
             st.metric("Variation estimée d'heures", f"{tot_hours:,.0f} h")
 
@@ -565,20 +581,27 @@ def render_simulateur_objectif_page():
             st.session_state.setdefault("sim_scenarios", {})[sc_name] = scen_payload
             st.success(f"Scénario **{sc_name}** enregistré.")
 
-        # Export du scénario courant
+        # Export du scénario courant (avec fallback automatique)
         if not results_df.empty:
-            xbytes = _export_scenario_excel(sc_name, {
+            file_bytes, ext, mime = _export_scenario_excel(sc_name, {
                 "target_adjustment": float(target_adjustment),
                 "distribution": {c: float(distrib_pct.get(c, 0.0)) for c in _get_all_categories()},
                 "rounding": rounding,
                 "cap_pct": float(cap_pct),
                 "results": results_df.copy(),
             })
+
+            label = "⬇️ Exporter ce scénario"
+            if ext == "csv":
+                label += " (CSV – fallback)"
+            else:
+                label += " (Excel)"
+
             st.download_button(
-                "⬇️ Exporter ce scénario (Excel)",
-                data=xbytes,
-                file_name=f"simulateur_objectif_{sc_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                label,
+                data=file_bytes,
+                file_name=f"simulateur_objectif_{sc_name}.{ext}",
+                mime=mime
             )
 
         # Comparaison de scénarios
@@ -619,10 +642,10 @@ def render_simulateur_objectif_page():
 - **Ce simulateur n’applique pas les règles opérationnelles** (*Besoin Jour*). Il sert à estimer
   l'impact **macro** d’un objectif de coût, converti en heures via les tarifs.
 - Utilisez les **presets** pour gagner du temps (±2/5/10 %), puis affinez avec la **répartition**.
-- Les **verrous** conservent le pourcentage saisi pour certaines catégories (protégées).
+- Les **verrous** conservent la catégorie à **0%** (pas d’impact) et elle n’est pas renormalisée.
 - Le **cap** limite la part maximale de l’objectif assignable par catégorie.
 - L’**arrondi** s’applique aux montants et aux heures.
-- Enregistrez des **scénarios** pour comparer les impacts et **exportez** vers Excel.
+- Enregistrez des **scénarios** pour comparer les impacts et **exportez** vers Excel (ou CSV fallback).
 """)
 
 
