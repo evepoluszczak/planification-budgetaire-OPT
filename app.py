@@ -13,7 +13,7 @@ from core.data_loader import load_pax_data
 from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import start_pax_loading, check_pax_loading_status, get_pax_loading_info
-from utils.autosave import save_session_state_auto, load_session_state_auto, autosave_exists, get_autosave_info
+from utils.autosave import save_session_state_auto, load_session_state_auto, autosave_exists, get_autosave_info, list_all_autosaves
 from ui.components import show_help_dialog, planning_editor_ui
 from zoneinfo import ZoneInfo
 
@@ -110,17 +110,60 @@ if not st.session_state.data_loaded:
                 st.subheader("Reprendre la session")
                 st.markdown("Restaurez votre dernière session sauvegardée automatiquement.")
 
-                if autosave_info and 'error' not in autosave_info:
-                    st.caption(f"📅 Sauvegardé le : {autosave_info.get('saved_at', 'inconnu')}")
-                    st.caption(f"📊 Taille : {autosave_info.get('file_size', 0) / 1024:.1f} Ko")
+                # Récupérer toutes les sauvegardes disponibles
+                all_autosaves = list_all_autosaves()
 
-                if st.button("Reprendre la session", use_container_width=True, type="secondary"):
-                    success, message = load_session_state_auto()
-                    if success:
-                        st.success(message)
-                        st.rerun()
-                    else:
-                        st.error(message)
+                if all_autosaves:
+                    # Afficher les infos de la plus récente
+                    latest_save = all_autosaves[0]
+                    st.caption(f"📅 Sauvegardé le : {latest_save.get('saved_at', 'inconnu')}")
+                    st.caption(f"📊 Taille : {latest_save.get('file_size', 0) / 1024:.1f} Ko")
+
+                    # Avertissement si la sauvegarde est ancienne (> 7 jours)
+                    days_old = latest_save.get('days_old', 0)
+                    if days_old > 7:
+                        st.warning(f"⚠️ Cette sauvegarde date de **{days_old} jours**")
+                    elif days_old > 1:
+                        st.info(f"ℹ️ Sauvegarde d'il y a {days_old} jours")
+
+                    # Si plusieurs sauvegardes disponibles, permettre la sélection
+                    selected_save_path = None
+                    if len(all_autosaves) > 1:
+                        with st.expander(f"📂 {len(all_autosaves)} sauvegardes disponibles"):
+                            st.caption("Sélectionnez une sauvegarde à restaurer :")
+                            for idx, save_info in enumerate(all_autosaves):
+                                label = save_info.get('saved_at', 'inconnu')
+                                if save_info.get('is_current', False):
+                                    label += " (actuelle)"
+                                age = save_info.get('days_old', 0)
+                                if age == 0:
+                                    age_str = "aujourd'hui"
+                                elif age == 1:
+                                    age_str = "hier"
+                                else:
+                                    age_str = f"il y a {age} jours"
+
+                                if st.button(
+                                    f"{label} - {age_str}",
+                                    key=f"load_save_{idx}",
+                                    use_container_width=True,
+                                    type="primary" if idx == 0 else "secondary"
+                                ):
+                                    selected_save_path = save_info.get('file_path')
+                                    break
+
+                    # Bouton principal pour charger la plus récente
+                    if st.button("Reprendre la session", use_container_width=True, type="secondary"):
+                        selected_save_path = latest_save.get('file_path')
+
+                    # Charger la sauvegarde sélectionnée
+                    if selected_save_path:
+                        success, message = load_session_state_auto(selected_save_path)
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
 
 else:
     # =================== Interface principale (données chargées) ===================
