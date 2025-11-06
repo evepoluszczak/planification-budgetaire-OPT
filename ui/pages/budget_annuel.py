@@ -628,7 +628,7 @@ def render_budget_annuel_page():
                 # 318810 - Frais surveillance = (valeurs coût Sect. FR)
                 frais_surveillance = _sum_costs(calendar_df_all, ["Sect. FR", "Sect FR", "Secteur FR", "FR"])
                 # 318890 - Sous-traitance assistance passagers = (valeurs coût AT+EES+ATR+Coordinateurs+ATF)
-                sous_traitance_assistance = _sum_costs(calendar_df_all, ["AT"]) + _sum_costs(calendar_df_all, ["EES"])
+                sous_traitance_assistance = _sum_costs(calendar_df_all, ["AT", "EES", "ATR", "Coordinateurs", "ATF"])
                 # 318940 - Mandat contrôle de sûreté = (valeurs coût CSC)
                 mandat_controle_surete = _sum_costs(calendar_df_all, ["CSC"])
 
