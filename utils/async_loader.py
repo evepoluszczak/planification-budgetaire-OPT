@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 import json
 import pickle
+from zoneinfo import ZoneInfo
 
 
 class PaxLoaderThread(threading.Thread):
@@ -418,7 +419,9 @@ def check_pax_loading_status():
         # Stocker la date/heure de chargement et écrire dans le cache
         # pour tous les statuts (succès, partiel, erreur) afin d'éviter
         # les tentatives infinies en cas d'erreur
-        now = dt.datetime.now()
+        # Utiliser timezone Europe/Paris pour heure locale France
+        france_tz = ZoneInfo("Europe/Paris")
+        now = dt.datetime.now(france_tz)
         st.session_state.pax_loaded_date = now.date()
         st.session_state.pax_loaded_datetime = now
 
