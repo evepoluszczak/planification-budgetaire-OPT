@@ -533,20 +533,53 @@ def render_simulateur_objectif_page():
         st.divider()
 
         # ==== Calcul & affichages ====
-        if target_adjustment == 0:
-            st.info("Saisissez un objectif d'ajustement non nul pour lancer la simulation.")
-            return
-
-        results_df = _results_table(target_adjustment, distrib_pct, rates, rounding)
-
-        # ⬇️ Enregistrement automatique pour l'assistant Besoin Jour
-        _save_simulator_results_to_session(
-            results_df=results_df,
-            target_adjustment=target_adjustment,
-            distribution_pct=distrib_pct,
-            rounding=rounding,
-            cap_pct=cap_pct
+        # Vérifier si on a des résultats sauvegardés à afficher
+        has_saved_results = (
+            "simulateur_objectif_results" in st.session_state and
+            st.session_state["simulateur_objectif_results"] is not None and
+            not st.session_state["simulateur_objectif_results"].empty
         )
+
+        if target_adjustment == 0:
+            # Si pas d'objectif actuel mais résultats sauvegardés, les afficher
+            if has_saved_results:
+                col_info, col_clear = st.columns([4, 1])
+                with col_info:
+                    st.info("📋 Affichage des résultats précédents (ajustez l'objectif pour recalculer)")
+                with col_clear:
+                    if st.button("🗑️ Effacer", help="Effacer les résultats sauvegardés"):
+                        st.session_state.pop("simulateur_objectif_results", None)
+                        st.session_state.pop("simulateur_objectif_meta", None)
+                        st.rerun()
+
+                results_df = st.session_state["simulateur_objectif_results"].copy()
+                saved_meta = st.session_state.get("simulateur_objectif_meta", {})
+                saved_target = saved_meta.get("target_adjustment", 0)
+
+                # Afficher métadonnées
+                if saved_meta:
+                    col_meta1, col_meta2, col_meta3 = st.columns(3)
+                    with col_meta1:
+                        st.metric("Objectif précédent", f"{saved_target:,.0f} CHF")
+                    with col_meta2:
+                        st.caption(f"Arrondi: {saved_meta.get('rounding', 'N/A')}")
+                    with col_meta3:
+                        st.caption(f"Sauvegardé: {saved_meta.get('saved_at', 'N/A')}")
+            else:
+                st.info("Saisissez un objectif d'ajustement non nul pour lancer la simulation.")
+                return
+        else:
+            # Calculer de nouveaux résultats
+            results_df = _results_table(target_adjustment, distrib_pct, rates, rounding)
+
+            # ⬇️ Enregistrement automatique pour l'assistant Besoin Jour
+            _save_simulator_results_to_session(
+                results_df=results_df,
+                target_adjustment=target_adjustment,
+                distribution_pct=distrib_pct,
+                rounding=rounding,
+                cap_pct=cap_pct
+            )
 
         st.subheader("Résultat de la Simulation")
         st.dataframe(
