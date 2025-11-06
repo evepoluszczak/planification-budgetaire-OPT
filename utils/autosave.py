@@ -3,6 +3,7 @@ Système de sauvegarde automatique de l'état de l'application
 """
 import json
 import datetime
+import hashlib
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -15,6 +16,91 @@ from config.constants import RULES_BESOIN_JOUR_PATH, TIME_SLOTS
 AUTOSAVE_DIR = Path("autosaves")
 AUTOSAVE_FILE = AUTOSAVE_DIR / "autosave_session.json"  # Fichier principal (le plus récent)
 MAX_AUTOSAVES = 5  # Nombre maximum de sauvegardes à conserver
+
+
+def _compute_session_hash():
+    """
+    Calcule un hash des données importantes de la session pour détecter les changements
+    """
+    try:
+        hash_data = {}
+
+        # Hash du personnel
+        if 'personnel' in st.session_state and st.session_state.personnel is not None:
+            hash_data['personnel'] = st.session_state.personnel.to_json()
+
+        # Hash des saisons
+        if 'saisons' in st.session_state and st.session_state.saisons is not None:
+            hash_data['saisons'] = st.session_state.saisons.to_json()
+
+        # Hash des périmètres
+        if 'perimetres' in st.session_state:
+            hash_data['perimetres'] = json.dumps(st.session_state.perimetres, sort_keys=True)
+
+        # Hash des planning_data (grilles)
+        if 'planning_data' in st.session_state:
+            planning_hash = {}
+            for category, day_types in st.session_state.planning_data.items():
+                planning_hash[category] = {}
+                for day_type, grid_df in day_types.items():
+                    if isinstance(grid_df, pd.DataFrame):
+                        planning_hash[category][day_type] = grid_df.to_json()
+            hash_data['planning_data'] = json.dumps(planning_hash, sort_keys=True)
+
+        # Hash des règles besoin jour
+        if 'besoin_jour_ops' in st.session_state:
+            # Convertir les dates en string pour le hash
+            ops_for_hash = []
+            for op in st.session_state.besoin_jour_ops:
+                op_copy = op.copy()
+                if 'start' in op_copy and op_copy['start']:
+                    op_copy['start'] = str(op_copy['start'])
+                if 'end' in op_copy and op_copy['end']:
+                    op_copy['end'] = str(op_copy['end'])
+                ops_for_hash.append(op_copy)
+            hash_data['besoin_jour_ops'] = json.dumps(ops_for_hash, sort_keys=True)
+
+        # Hash des formations
+        if 'budget_formation_at' in st.session_state and st.session_state.budget_formation_at is not None:
+            hash_data['budget_formation_at'] = st.session_state.budget_formation_at.to_json()
+
+        if 'budget_formateurs_at' in st.session_state and st.session_state.budget_formateurs_at is not None:
+            hash_data['budget_formateurs_at'] = st.session_state.budget_formateurs_at.to_json()
+
+        # Créer le hash SHA256
+        hash_string = json.dumps(hash_data, sort_keys=True)
+        return hashlib.sha256(hash_string.encode()).hexdigest()
+
+    except Exception as e:
+        # En cas d'erreur, retourner None pour forcer une sauvegarde
+        return None
+
+
+def has_session_changed():
+    """
+    Vérifie si la session a changé depuis la dernière sauvegarde
+
+    Returns:
+        bool: True si la session a changé, False sinon
+    """
+    if not st.session_state.get('data_loaded', False):
+        return False
+
+    current_hash = _compute_session_hash()
+    last_hash = st.session_state.get('_last_autosave_hash')
+
+    # Si c'est la première fois ou si le hash a changé
+    if last_hash is None or current_hash != last_hash:
+        return True
+
+    return False
+
+
+def update_session_hash():
+    """
+    Met à jour le hash de la session après une sauvegarde
+    """
+    st.session_state._last_autosave_hash = _compute_session_hash()
 
 
 def _serialize_dataframe(df):
@@ -152,6 +238,9 @@ def save_session_state_auto():
 
         # Nettoyer les anciennes sauvegardes (garder seulement les MAX_AUTOSAVES plus récentes)
         _cleanup_old_autosaves()
+
+        # Mettre à jour le hash après sauvegarde réussie
+        update_session_hash()
 
         return True, "Sauvegarde automatique réussie"
 
