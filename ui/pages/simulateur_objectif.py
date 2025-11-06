@@ -364,18 +364,37 @@ def render_simulateur_objectif_page():
         with colp5:
             if st.button("Réinitialiser"):
                 st.session_state.sim_target_adjustment = 0.0
-
-        # Objectif libre
-        target_adjustment = st.number_input(
-            "Objectif d'ajustement (CHF — négatif pour réduire)",
-            value=_safe_to_float(st.session_state.get("sim_target_adjustment", 0.0), 0.0),
-            step=1000.0,
-            format="%.0f",
-            key="sim_target_adjustment",
-            help="Saisir un montant total à répartir entre les catégories (ex: -150000 pour réduire de 150k).",
+                st.session_state.sim_target_percent = 0.0
+        
+        # ==== Mode d'objectif : CHF ou % ====
+        mode_obj = st.radio(
+            "Mode d'objectif",
+            ["Montant (CHF)", "Pourcentage (%)"],
+            horizontal=True,
+            key="sim_mode_objectif",
         )
+        
+        if mode_obj == "Montant (CHF)":
+            target_adjustment = st.number_input(
+                "Objectif d'ajustement (CHF — négatif pour réduire)",
+                value=_safe_to_float(st.session_state.get("sim_target_adjustment", 0.0), 0.0),
+                step=1000.0,
+                format="%.0f",
+                key="sim_target_adjustment",
+                help="Saisir un montant total à répartir entre les catégories (ex: -150000 pour réduire de 150k).",
+            )
+        else:
+            # % manuel de l’utilisateur, appliqué à la base (avec formation)
+            target_percent = st.number_input(
+                "Objectif d'ajustement (%) — négatif pour réduire",
+                value=_safe_to_float(st.session_state.get("sim_target_percent", 0.0), 0.0),
+                step=0.5,
+                format="%.1f",
+                key="sim_target_percent",
+                help="Ex: -5.0 pour réduire de 5% le budget annuel (avec formation).",
+            )
+            target_adjustment = round(base_cost_total * (target_percent / 100.0), 0)
 
-        st.divider()
 
         # ==== Stratégies d'auto-répartition ====
         st.markdown("**Remplissage automatique de la répartition (%)**")
