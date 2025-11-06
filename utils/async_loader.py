@@ -160,6 +160,42 @@ class PaxLoaderThread(threading.Thread):
         return pax_agg, min_date, max_date
 
 
+def is_pax_data_cached_today() -> bool:
+    """
+    Vérifie si les données PAX ont déjà été chargées aujourd'hui.
+    Retourne True si les données sont en cache et datent d'aujourd'hui.
+    """
+    # Vérifier si on a un timestamp de chargement
+    if 'pax_loaded_date' not in st.session_state:
+        return False
+
+    # Vérifier si les données sont présentes
+    has_forecast = st.session_state.get('pax_forecast_status') == 'loaded'
+    has_historical = st.session_state.get('pax_historical_status') == 'loaded'
+
+    if not (has_forecast or has_historical):
+        return False
+
+    # Vérifier si c'est aujourd'hui
+    loaded_date = st.session_state.pax_loaded_date
+    today = dt.date.today()
+
+    return loaded_date == today
+
+
+def get_pax_cache_info() -> dict:
+    """
+    Retourne les informations sur le cache PAX.
+    """
+    return {
+        'is_cached': is_pax_data_cached_today(),
+        'loaded_date': st.session_state.get('pax_loaded_date'),
+        'loaded_datetime': st.session_state.get('pax_loaded_datetime'),
+        'forecast_status': st.session_state.get('pax_forecast_status'),
+        'historical_status': st.session_state.get('pax_historical_status'),
+    }
+
+
 def start_pax_loading(forecast_path: Path, historical_path: Path):
     """
     Démarre le chargement des données PAX (Forecast + Historic) en arrière-plan.
@@ -237,6 +273,12 @@ def check_pax_loading_status():
             st.session_state.pax_loading_error = ' | '.join(result['errors'])
         else:
             st.session_state.pax_loading_error = None
+
+        # Stocker la date/heure de chargement si succès ou partiel
+        if status in ['success', 'partial']:
+            now = dt.datetime.now()
+            st.session_state.pax_loaded_date = now.date()
+            st.session_state.pax_loaded_datetime = now
 
         # Nettoyer la référence au thread
         del st.session_state.pax_loader_thread
