@@ -342,6 +342,55 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
     return b"", "bin", "application/octet-stream"
 
 
+def _auto_create_ajustement_propose(results_df: pd.DataFrame,
+                                     target_adjustment: float) -> None:
+    """
+    Crée automatiquement l'ajustement_propose pour l'Assistant Besoin Jour
+    à partir des résultats du simulateur.
+    """
+    from datetime import datetime
+    from models.suggestion import AjustementPropose
+
+    # Créer la distribution à partir du DataFrame résultats
+    distribution = {}
+    for _, row in results_df.iterrows():
+        cat = str(row['Catégorie'])
+        delta_h = row.get('Ajustement Heures (h)', 0)
+        delta_c = row.get('Ajustement Coût (CHF)', 0)
+        part_p = row.get('Part Répartition (%)', 0)
+
+        # Gérer les NaN
+        delta_h = float(delta_h) if pd.notna(delta_h) else 0.0
+        delta_c = float(delta_c) if pd.notna(delta_c) else 0.0
+        part_p = float(part_p) if pd.notna(part_p) else 0.0
+
+        distribution[cat] = {
+            'delta_hours': delta_h,
+            'delta_chf': delta_c,
+            'percentage': part_p
+        }
+
+    total_hours = results_df['Ajustement Heures (h)'].fillna(0).sum()
+
+    # Récupérer les verrous si définis
+    locked_perimetres = st.session_state.get('locked_perimetres_assist', [])
+
+    ajustement = AjustementPropose(
+        total_delta_hours=float(total_hours),
+        total_delta_chf=float(target_adjustment),
+        distribution=distribution,
+        locks={
+            'categories': [],
+            'perimetres': locked_perimetres,
+            'dates': []
+        },
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    # Stocker dans session_state
+    st.session_state.ajustement_propose = ajustement
+
+
 def _save_simulator_results_to_session(results_df: pd.DataFrame,
                                        target_adjustment: float,
                                        distribution_pct: dict[str, float],
@@ -350,6 +399,7 @@ def _save_simulator_results_to_session(results_df: pd.DataFrame,
     """
     Sauvegarde les résultats du simulateur dans st.session_state
     pour consommation par l'assistant Besoin Jour.
+    Crée aussi automatiquement l'ajustement_propose pour l'Assistant.
     """
     if results_df is None or results_df.empty:
         st.session_state.pop("simulateur_objectif_results", None)
@@ -368,6 +418,9 @@ def _save_simulator_results_to_session(results_df: pd.DataFrame,
         "cap_pct": float(cap_pct),
         "saved_at": pd.Timestamp.now().isoformat(timespec="seconds")
     }
+
+    # Créer automatiquement l'ajustement_propose pour l'Assistant
+    _auto_create_ajustement_propose(df, target_adjustment)
 
 
 # =========================
@@ -555,6 +608,9 @@ def render_simulateur_objectif_page():
                 results_df = st.session_state["simulateur_objectif_results"].copy()
                 saved_meta = st.session_state.get("simulateur_objectif_meta", {})
                 saved_target = saved_meta.get("target_adjustment", 0)
+
+                # Restaurer automatiquement l'ajustement_propose pour l'Assistant
+                _auto_create_ajustement_propose(results_df, saved_target)
 
                 # Afficher métadonnées
                 if saved_meta:
@@ -778,73 +834,41 @@ def render_simulateur_objectif_page():
 
         # ==== Intégration Assistant Besoin Jour ====
         st.subheader("🤖 Assistant Besoin Jour")
-        st.markdown(
-            "Envoyez ces résultats à l'**Assistant Besoin Jour** pour obtenir "
-            "des suggestions automatiques basées sur les données PAX et votre planning."
-        )
 
-        col_assist1, col_assist2 = st.columns([3, 1])
-        with col_assist1:
-            with st.expander("⚙️ Options Avancées (Verrous)"):
-                st.markdown(
-                    "Les verrous empêchent l'assistant de modifier certains "
-                    "périmètres ou dates spécifiques."
-                )
-                locked_perimetres_assist = st.multiselect(
-                    "Verrouiller des périmètres (AT)",
-                    options=st.session_state.get("perimetres", {}).get("AT", []),
-                    default=[],
-                    key="locked_perimetres_assist"
-                )
+        # Vérifier si ajustement est disponible
+        if 'ajustement_propose' in st.session_state and st.session_state.ajustement_propose:
+            st.success(
+                "✅ Ajustement automatiquement disponible pour l'Assistant Besoin Jour ! "
+                "Rendez-vous sur la page **Assistant Besoin Jour** pour générer les suggestions."
+            )
 
-        with col_assist2:
-            if st.button(
-                "📤 Envoyer vers Assistant",
-                type="primary",
-                use_container_width=True,
-                key="send_to_assistant_btn"
-            ):
-                # Créer l'objet AjustementPropose
-                distribution = {}
-                for _, row in results_df.iterrows():
-                    cat = str(row['Catégorie'])
-                    delta_h = row.get('Ajustement Heures (h)', 0)
-                    delta_c = row.get('Ajustement Coût (CHF)', 0)
-                    part_p = row.get('Part Répartition (%)', 0)
+            # Afficher info sur l'ajustement
+            ajust = st.session_state.ajustement_propose
+            col_info1, col_info2 = st.columns(2)
+            with col_info1:
+                st.caption(f"📊 Total: {ajust.total_delta_chf:+,.0f} CHF / {ajust.total_delta_hours:+,.1f} h")
+            with col_info2:
+                nb_categories = len([k for k, v in ajust.distribution.items() if v.get('delta_chf', 0) != 0])
+                st.caption(f"📂 {nb_categories} catégorie(s) impactée(s)")
+        else:
+            st.info("Aucun ajustement en attente pour l'Assistant.")
 
-                    # Gérer les NaN
-                    delta_h = float(delta_h) if pd.notna(delta_h) else 0.0
-                    delta_c = float(delta_c) if pd.notna(delta_c) else 0.0
-                    part_p = float(part_p) if pd.notna(part_p) else 0.0
+        # Options avancées (verrous)
+        with st.expander("⚙️ Options Avancées (Verrous)"):
+            st.markdown(
+                "Les verrous empêchent l'assistant de modifier certains "
+                "périmètres ou dates spécifiques."
+            )
+            locked_perimetres_assist = st.multiselect(
+                "Verrouiller des périmètres (AT)",
+                options=st.session_state.get("perimetres", {}).get("AT", []),
+                default=st.session_state.get('locked_perimetres_assist', []),
+                key="locked_perimetres_assist"
+            )
 
-                    distribution[cat] = {
-                        'delta_hours': delta_h,
-                        'delta_chf': delta_c,
-                        'percentage': part_p
-                    }
-
-                total_hours = results_df['Ajustement Heures (h)'].fillna(0).sum()
-
-                ajustement = AjustementPropose(
-                    total_delta_hours=float(total_hours),
-                    total_delta_chf=float(target_adjustment),
-                    distribution=distribution,
-                    locks={
-                        'categories': list(locked_cats) if 'locked_cats' in locals() else [],
-                        'perimetres': locked_perimetres_assist,
-                        'dates': []
-                    },
-                    timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                )
-
-                # Stocker dans session_state
-                st.session_state.ajustement_propose = ajustement
-
-                st.success(
-                    "✅ Ajustement envoyé à l'Assistant Besoin Jour ! "
-                    "Rendez-vous sur la page **Assistant Besoin Jour** pour générer les suggestions."
-                )
-                st.balloons()
+            # Mettre à jour les verrous dans l'ajustement si modifiés
+            if 'ajustement_propose' in st.session_state and st.session_state.ajustement_propose:
+                st.session_state.ajustement_propose.locks['perimetres'] = locked_perimetres_assist
 
 
     # Aide
