@@ -12,7 +12,9 @@ from core.budget import generate_budget_state
 from config.constants import RULES_BESOIN_JOUR_PATH, TIME_SLOTS
 
 
-AUTOSAVE_FILE = Path("autosave_session.json")
+AUTOSAVE_DIR = Path("autosaves")
+AUTOSAVE_FILE = AUTOSAVE_DIR / "autosave_session.json"  # Fichier principal (le plus récent)
+MAX_AUTOSAVES = 5  # Nombre maximum de sauvegardes à conserver
 
 
 def _serialize_dataframe(df):
@@ -51,6 +53,25 @@ def _deserialize_date(date_str):
 def save_session_state_auto():
     """Sauvegarde automatique de l'état de session en JSON"""
     try:
+        # Créer le dossier de sauvegardes s'il n'existe pas
+        AUTOSAVE_DIR.mkdir(exist_ok=True)
+
+        # Si le fichier principal existe, le copier dans l'historique avant d'écraser
+        if AUTOSAVE_FILE.exists():
+            try:
+                # Lire la date de l'ancienne sauvegarde
+                with open(AUTOSAVE_FILE, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                old_timestamp = old_data.get('saved_at', datetime.datetime.now().isoformat())
+                # Créer un nom de fichier avec timestamp
+                timestamp_str = old_timestamp.replace(':', '-').replace('.', '-')[:19]
+                backup_file = AUTOSAVE_DIR / f"autosave_{timestamp_str}.json"
+                # Copier l'ancienne sauvegarde
+                import shutil
+                shutil.copy2(AUTOSAVE_FILE, backup_file)
+            except Exception:
+                pass  # Ne pas bloquer si la copie échoue
+
         # Construire l'état à sauvegarder
         state_to_save = {
             'saved_at': datetime.datetime.now().isoformat(),
@@ -129,19 +150,25 @@ def save_session_state_auto():
         with open(AUTOSAVE_FILE, 'w', encoding='utf-8') as f:
             json.dump(state_to_save, f, ensure_ascii=False, indent=2)
 
+        # Nettoyer les anciennes sauvegardes (garder seulement les MAX_AUTOSAVES plus récentes)
+        _cleanup_old_autosaves()
+
         return True, "Sauvegarde automatique réussie"
 
     except Exception as e:
         return False, f"Erreur lors de la sauvegarde automatique: {e}"
 
 
-def load_session_state_auto():
+def load_session_state_auto(file_path=None):
     """Charge l'état de session depuis la sauvegarde automatique JSON"""
     try:
-        if not AUTOSAVE_FILE.exists():
+        if file_path is None:
+            file_path = AUTOSAVE_FILE
+
+        if not file_path.exists():
             return False, "Aucune sauvegarde automatique trouvée"
 
-        with open(AUTOSAVE_FILE, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             state_data = json.load(f)
 
         # Personnel
@@ -272,29 +299,97 @@ def autosave_exists():
     return AUTOSAVE_FILE.exists()
 
 
-def get_autosave_info():
+def get_autosave_info(file_path=None):
     """Retourne des informations sur la sauvegarde automatique"""
-    if not AUTOSAVE_FILE.exists():
+    if file_path is None:
+        file_path = AUTOSAVE_FILE
+
+    if not file_path.exists():
         return None
 
     try:
-        with open(AUTOSAVE_FILE, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             state_data = json.load(f)
 
         saved_at = state_data.get('saved_at', 'inconnu')
         # Parser la date ISO
+        saved_datetime = None
+        saved_at_str = saved_at
+        days_old = 0
         try:
             saved_datetime = datetime.datetime.fromisoformat(saved_at)
             saved_at_str = saved_datetime.strftime('%d/%m/%Y à %H:%M:%S')
+            # Calculer l'âge en jours
+            days_old = (datetime.datetime.now() - saved_datetime).days
         except:
-            saved_at_str = saved_at
+            pass
 
         return {
             'saved_at': saved_at_str,
-            'file_size': AUTOSAVE_FILE.stat().st_size,
+            'saved_datetime': saved_datetime,
+            'days_old': days_old,
+            'file_size': file_path.stat().st_size,
             'has_personnel': 'personnel' in state_data,
             'has_planning': 'planning_data' in state_data,
             'has_formation': 'budget_formation_at' in state_data,
+            'file_path': file_path,
         }
     except Exception as e:
         return {'error': str(e)}
+
+
+def list_all_autosaves():
+    """Liste toutes les sauvegardes automatiques disponibles"""
+    if not AUTOSAVE_DIR.exists():
+        return []
+
+    autosaves = []
+    # Fichier principal
+    if AUTOSAVE_FILE.exists():
+        info = get_autosave_info(AUTOSAVE_FILE)
+        if info and 'error' not in info:
+            info['is_current'] = True
+            autosaves.append(info)
+
+    # Fichiers d'historique
+    for file_path in sorted(AUTOSAVE_DIR.glob("autosave_*.json"), reverse=True):
+        if file_path != AUTOSAVE_FILE:
+            info = get_autosave_info(file_path)
+            if info and 'error' not in info:
+                info['is_current'] = False
+                autosaves.append(info)
+
+    # Trier par date (plus récent en premier)
+    autosaves.sort(key=lambda x: x.get('saved_datetime', datetime.datetime.min), reverse=True)
+
+    return autosaves
+
+
+def _cleanup_old_autosaves():
+    """Supprime les anciennes sauvegardes en gardant seulement les MAX_AUTOSAVES plus récentes"""
+    try:
+        if not AUTOSAVE_DIR.exists():
+            return
+
+        # Lister tous les fichiers de sauvegarde (sauf le principal)
+        backup_files = []
+        for file_path in AUTOSAVE_DIR.glob("autosave_*.json"):
+            if file_path != AUTOSAVE_FILE:
+                try:
+                    mtime = file_path.stat().st_mtime
+                    backup_files.append((mtime, file_path))
+                except:
+                    pass
+
+        # Trier par date (plus ancien en premier)
+        backup_files.sort()
+
+        # Supprimer les plus anciens si on dépasse MAX_AUTOSAVES
+        while len(backup_files) >= MAX_AUTOSAVES:
+            _, old_file = backup_files.pop(0)
+            try:
+                old_file.unlink()
+            except:
+                pass
+    except Exception:
+        pass  # Ne pas bloquer en cas d'erreur
