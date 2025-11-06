@@ -104,6 +104,24 @@ def render_assistant_besoin_jour_page():
     with st.container(border=True):
         st.subheader("⚙️ Configuration du Moteur de Suggestions")
 
+        # Plage d'analyse
+        st.markdown("**Plage d'Analyse:**")
+        col_days1, col_days2 = st.columns(2)
+        with col_days1:
+            max_days = st.number_input(
+                "Nombre de jours à analyser",
+                min_value=1,
+                max_value=365,
+                value=30,
+                step=1,
+                key="config_max_days",
+                help="Limiter à 30-60 jours pour de meilleures performances"
+            )
+        with col_days2:
+            st.info(f"Analysera environ {max_days} jours × 48 slots × 5 périmètres = ~{max_days * 48 * 5:,} combinaisons")
+
+        st.divider()
+
         with st.expander("Paramètres Avancés", expanded=False):
             col1, col2 = st.columns(2)
 
@@ -194,8 +212,13 @@ def render_assistant_besoin_jour_page():
                         respect_strict_delta=strict_delta
                     )
 
-                    # Générer les suggestions
-                    suggestions_dict = generate_suggestions(ajustement, config, year)
+                    # Générer les suggestions avec max_days
+                    suggestions_dict = generate_suggestions(
+                        ajustement,
+                        config,
+                        year,
+                        max_days=max_days
+                    )
 
                     # Stocker en session_state
                     st.session_state.generated_suggestions = suggestions_dict
