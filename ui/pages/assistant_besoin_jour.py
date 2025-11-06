@@ -1,444 +1,344 @@
-# ui/pages/assistant_besoin_jour.py
 """
-Assistant Besoin Jour
-- Construit le ratio AT/PAX par jour en récupérant automatiquement :
-  * PAX (forecast, 30' ou daily) via plusieurs clés possibles dans session_state
-  * Heures AT Modifié (sinon Annuel)
-- Repère automatiquement s'il faut AJOUTER ou RETIRER des heures (via Simulateur d'Objectif)
-- Propose des jours cibles (faible ratio pour AJOUTER, ratio élevé pour RETIRER)
-- Stocke les suggestions et un mini "ops" JSON dans session_state pour application ultérieure
+Page Assistant Besoin Jour - Suggestions intelligentes d'ajustement
 """
-
-from __future__ import annotations
-
-import pandas as pd
-import numpy as np
 import streamlit as st
-import calendar
-import datetime as dt
+import pandas as pd
+from datetime import datetime, date
+from typing import List, Dict
+
+from models.suggestion import (
+    Suggestion, SuggestionConfig, AjustementPropose, ApplicationLog
+)
+from core.suggestions_engine import generate_suggestions, apply_suggestions
+from utils.date_utils import _date_to_str
 
 
-# =============== Helpers diagnostics & chargement ===============
+def render_assistant_besoin_jour_page():
+    """Affiche la page Assistant Besoin Jour"""
+    st.title("🤖 Assistant Besoin Jour - Suggestions Intelligentes")
+    st.markdown(
+        "L'assistant analyse vos objectifs du Simulateur et propose automatiquement "
+        "des ajustements optimaux basés sur les prévisions PAX et la planification actuelle."
+    )
 
-def _why_no_ratio():
-    msgs = []
-
-    # 1) PAX sources
-    pax_sources = [
-        ("pax_daily",    st.session_state.get("pax_daily")),
-        ("pax_forecast", st.session_state.get("pax_forecast")),
-        ("pax_merged",   st.session_state.get("pax_merged")),
-        ("pax_data",     st.session_state.get("pax_data")),
-        ("pax_df_30min", st.session_state.get("pax_df_30min")),
-        ("pax_30min",    st.session_state.get("pax_30min")),
-    ]
-    pax_ok = any(isinstance(obj, pd.DataFrame) and not obj.empty for _, obj in pax_sources)
-    if not pax_ok:
-        msgs.append("Aucune source PAX exploitable trouvée (pax_daily / pax_forecast / pax_merged / ...).")
-
-    # 2) Heures (Modifié/Annuel)
-    bs = st.session_state.get("budget_state", {}) or {}
-    ann = bs.get("calendar_df", pd.DataFrame())
-    mod = (st.session_state.get("budget_modifie_state") or {}).get("calendar_df", pd.DataFrame())
-    if (not isinstance(mod, pd.DataFrame) or mod.empty) and (not isinstance(ann, pd.DataFrame) or ann.empty):
-        msgs.append("Aucun calendar_df (Annuel) ni calendar_df (Modifié) disponible.")
-
-    if msgs:
-        return " / ".join(msgs)
-    return None
-
-
-def _daily_pax_from_forecast(flux: str = "Tous") -> pd.DataFrame:
-    """
-    Retourne un DF [Date, Pax_Total].
-    Cherche plusieurs clés de session_state et accepte soit un DF déjà daily,
-    soit des séries 15'/30' à agréger par jour.
-    """
-    candidates = [
-        st.session_state.get("pax_daily"),
-        st.session_state.get("pax_forecast"),
-        st.session_state.get("pax_merged"),
-        st.session_state.get("pax_data"),
-        st.session_state.get("pax_df_30min"),
-        st.session_state.get("pax_30min"),
-    ]
-    df_src = next((d for d in candidates if isinstance(d, pd.DataFrame) and not d.empty), None)
-    if df_src is None:
-        return pd.DataFrame()
-
-    df = df_src.copy()
-
-    # CAS 1: déjà daily
-    if "Date" in df.columns and any(c in df.columns for c in ["Pax_Total", "PAX", "Pax"]):
-        date_col = "Date"
-        pax_col = next(c for c in ["Pax_Total", "PAX", "Pax"] if c in df.columns)
-        out = df[[date_col, pax_col]].copy()
-        out.rename(columns={pax_col: "Pax_Total"}, inplace=True)
-        out["Date"] = pd.to_datetime(out["Date"]).dt.normalize()
-        out = out.groupby("Date", as_index=False)["Pax_Total"].sum()
-        return out
-
-    # CAS 2: granularité 15'/30'
-    if "DateTime" in df.columns:
-        df["DateTime"] = pd.to_datetime(df["DateTime"])
-        df = df.set_index("DateTime")
-
-    if not isinstance(df.index, pd.DatetimeIndex):
-        try:
-            df.index = pd.to_datetime(df.index)
-        except Exception:
-            return pd.DataFrame()
-
-    def _sum_cols(cands):
-        cols = [c for c in cands if c in df.columns]
-        return df[cols].sum(axis=1) if cols else None
-
-    if flux == "Arrivée":
-        s = _sum_cols(["Pax_Schengen_A", "Pax_NonSchengen_A", "PAX_A", "Pax_A", "Arrivals"])
-    elif flux == "Départ":
-        s = _sum_cols(["Pax_Schengen_D", "Pax_NonSchengen_D", "PAX_D", "Pax_D", "Departures"])
-    else:
-        sA = _sum_cols(["Pax_Schengen_A", "Pax_NonSchengen_A", "PAX_A", "Pax_A", "Arrivals"])
-        sD = _sum_cols(["Pax_Schengen_D", "Pax_NonSchengen_D", "PAX_D", "Pax_D", "Departures"])
-        if sA is not None and sD is not None:
-            s = sA.add(sD, fill_value=0)
-        else:
-            s = sA or sD
-
-    if s is None or s.empty:
-        # dernier recours: toutes colonnes numériques
-        num = df.select_dtypes(include=[np.number])
-        s = num.sum(axis=1) if not num.empty else None
-    if s is None or s.empty:
-        return pd.DataFrame()
-
-    daily = s.groupby(s.index.normalize()).sum()
-    out = pd.DataFrame({"Date": daily.index, "Pax_Total": daily.values})
-    out["Date"] = pd.to_datetime(out["Date"]).dt.normalize()
-    return out
-
-
-def _daily_hours_from_calendar(prefer_modifie: bool = True) -> pd.DataFrame:
-    """
-    Retourne DF [Date, Heures_AT].
-    Cherche d’abord calendar_df du budget_modifie_state (si présent),
-    sinon calendar_df de budget_state (Annuel).
-    Utilise 'Heures_AT' si présente, sinon 'Heures_Total_Jour'.
-    """
-    bs = st.session_state.get("budget_state", {}) or {}
-    ann = bs.get("calendar_df", pd.DataFrame())
-    mod = (st.session_state.get("budget_modifie_state") or {}).get("calendar_df", pd.DataFrame())
-
-    base = mod if (prefer_modifie and isinstance(mod, pd.DataFrame) and not mod.empty) else ann
-    if not isinstance(base, pd.DataFrame) or base.empty:
-        return pd.DataFrame()
-
-    base = base.copy()
-    base["Date"] = pd.to_datetime(base["Date"]).dt.normalize()
-
-    col = None
-    for c in ["Heures_AT", "Heures_AT_jour", "Heures_Total_Jour"]:
-        if c in base.columns:
-            col = c; break
-    if col is None:
-        return pd.DataFrame()
-
-    h = base.groupby("Date", as_index=False)[col].sum()
-    return h.rename(columns={col: "Heures_AT"})
-
-
-def _build_ratio_df() -> pd.DataFrame:
-    """
-    Joint PAX/day et Heures AT/day -> ratio AT par 1'000 PAX.
-    Colonnes: Date, Pax_Total, Heures_AT, Ratio_AT_par_1000PAX, Jour_FR, Mois_FR, Saison
-    (Saison si dispo dans calendar_df)
-    """
-    pax = _daily_pax_from_forecast()
-    hrs = _daily_hours_from_calendar()
-
-    if pax.empty or hrs.empty:
-        return pd.DataFrame()
-
-    df = pd.merge(hrs, pax, on="Date", how="inner")
-    if df.empty:
-        return pd.DataFrame()
-
-    df["Pax_Total"] = pd.to_numeric(df["Pax_Total"], errors="coerce").fillna(0.0)
-    df["Heures_AT"] = pd.to_numeric(df["Heures_AT"], errors="coerce").fillna(0.0)
-    df = df[df["Pax_Total"] > 0].copy()
-    if df.empty:
-        return pd.DataFrame()
-
-    df["Ratio_AT_par_1000PAX"] = (df["Heures_AT"] / df["Pax_Total"]) * 1000.0
-
-    # Jour_FR & Mois_FR
-    jours_fr = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
-    df["Jour_FR"] = df["Date"].dt.dayofweek.map(lambda i: jours_fr[i])
-    # Mois en français
-    mois_fr = {
-        1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
-        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"
-    }
-    df["Mois_FR"] = df["Date"].dt.month.map(mois_fr)
-
-    # Saison si dispo dans calendar_df
-    saison_map = {}
-    bs = st.session_state.get("budget_state", {}) or {}
-    for dsrc in [ (st.session_state.get("budget_modifie_state") or {}).get("calendar_df"),
-                  bs.get("calendar_df")]:
-        if isinstance(dsrc, pd.DataFrame) and not dsrc.empty and "Date" in dsrc.columns and "Saison" in dsrc.columns:
-            tmp = dsrc[["Date","Saison"]].copy()
-            tmp["Date"] = pd.to_datetime(tmp["Date"]).dt.normalize()
-            for r in tmp.itertuples(index=False):
-                saison_map[r.Date] = r.Saison
-            break
-    df["Saison"] = df["Date"].map(saison_map).fillna("—")
-
-    return df
-
-
-def _get_simulated_hour_delta_from_simulateur() -> float:
-    """
-    Va lire la dernière simulation du Simulateur d'Objectif (si présente)
-    et récupère la somme des 'Ajustement Heures (h)' pour la catégorie AT uniquement.
-    Convention: le Simulateur sauvegarde dans st.session_state['sim_objectif_current'] un dict:
-      {
-         'results': DataFrame(columns=[Catégorie, Ajustement Heures (h), ...]),
-         'target_adjustment': float, 'distribution': dict, ...
-      }
-    """
-    sim = st.session_state.get("sim_objectif_current") or {}
-    df = sim.get("results")
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return 0.0
-
-    # On ne cible que la catégorie AT (cohérent avec Besoin Jour sur AT)
-    if "Catégorie" not in df.columns or "Ajustement Heures (h)" not in df.columns:
-        return 0.0
-
-    dff = df[df["Catégorie"].astype(str) == "AT"].copy()
-    if dff.empty:
-        return 0.0
-
-    try:
-        return float(pd.to_numeric(dff["Ajustement Heures (h)"], errors="coerce").fillna(0).sum())
-    except Exception:
-        return 0.0
-
-
-def _pick_days(df_ratio: pd.DataFrame, needed_hours: float, per_day_step: float) -> pd.DataFrame:
-    """
-    Choisit des jours pour ajouter/retirer des heures.
-    - needed_hours > 0 => il faut AJOUTER des heures -> on prend d'abord les jours à plus FAIBLE ratio
-    - needed_hours < 0 => il faut RETIRER des heures -> on prend d'abord les jours à plus FORT ratio
-    Retourne un DF avec colonnes:
-      Date, Jour_FR, Mois_FR, Saison, Pax_Total, Heures_AT, Ratio_AT_par_1000PAX, Delta_Heures
-    """
-    if df_ratio.empty or per_day_step <= 0:
-        return pd.DataFrame()
-
-    df = df_ratio.sort_values(
-        "Ratio_AT_par_1000PAX",
-        ascending=True if needed_hours > 0 else False
-    ).copy()
-
-    remain = abs(needed_hours)
-    deltas = []
-    for _, r in df.iterrows():
-        if remain <= 0:
-            break
-        step = min(per_day_step, remain)
-        deltas.append(step)
-        remain -= step
-
-    df = df.iloc[:len(deltas)].copy()
-    df["Delta_Heures"] = [d if needed_hours > 0 else -d for d in deltas]
-    return df
-
-
-# ============================ UI principale ============================
-
-def render_besoin_jour_assistant_page():
-    st.title("Assistant Besoin Jour — Ciblage des jours (AT/PAX)")
-
-    # Debug panel (utile si rien ne s'affiche)
-    with st.expander("🧪 Debug AT/PAX (si besoin)"):
-        msg = _why_no_ratio()
-        if msg:
-            st.error("Pourquoi le ratio est indisponible : " + msg)
-        else:
-            st.success("Sources présentes : PAX + Heures (Annuel/Modifié) OK.")
-        # Aperçus
-        pax = _daily_pax_from_forecast()
-        hrs = _daily_hours_from_calendar()
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("Aperçu PAX/jour")
-            if isinstance(pax, pd.DataFrame) and not pax.empty:
-                st.dataframe(pax.head(10), use_container_width=True, hide_index=True)
-            else:
-                st.write("—")
-        with c2:
-            st.caption("Aperçu Heures AT/jour")
-            if isinstance(hrs, pd.DataFrame) and not hrs.empty:
-                st.dataframe(hrs.head(10), use_container_width=True, hide_index=True)
-            else:
-                st.write("—")
-
-    # Construire la base ratio
-    df_ratio = _build_ratio_df()
-    if df_ratio.empty:
-        st.warning("Pas de données suffisantes pour calculer le ratio AT/PAX.")
+    # Pré-requis : Budget généré
+    bs = st.session_state.get('budget_state', {})
+    if not bs or 'year' not in bs or 'calendar_df' not in bs or bs['calendar_df'].empty:
+        st.warning(
+            "⚠️ Aucun budget annuel valide en mémoire. "
+            "Veuillez d'abord en générer un via la page **Budget Annuel**."
+        )
         st.stop()
 
-    # Filtres
-    st.markdown("---")
-    st.subheader("Filtres")
+    year = bs['year']
 
-    # Mois FR uniques dans l'ordre calendrier
-    mois_order = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"]
-    mois_dispo = [m for m in mois_order if m in df_ratio["Mois_FR"].unique().tolist()]
-    jours_fr = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
-    jours_dispo = [j for j in jours_fr if j in df_ratio["Jour_FR"].unique().tolist()]
-    saisons_dispo = sorted([s for s in df_ratio["Saison"].unique().tolist() if isinstance(s, str)])
-
-    colf1, colf2, colf3 = st.columns(3)
-    with colf1:
-        sel_mois = st.multiselect("Mois", options=mois_dispo, default=mois_dispo)
-    with colf2:
-        sel_jour = st.multiselect("Jour de semaine", options=jours_dispo, default=jours_dispo)
-    with colf3:
-        sel_saison = st.multiselect("Saison", options=saisons_dispo, default=saisons_dispo)
-
-    dff = df_ratio[
-        df_ratio["Mois_FR"].isin(sel_mois) &
-        df_ratio["Jour_FR"].isin(sel_jour) &
-        df_ratio["Saison"].isin(sel_saison)
-    ].copy()
-    if dff.empty:
-        st.warning("Aucune ligne après filtres.")
+    # Vérifier si des données PAX sont disponibles
+    if 'pax_forecast_data' not in st.session_state or \
+       st.session_state.pax_forecast_data.empty:
+        st.error(
+            "⚠️ Aucune donnée PAX forecast chargée. "
+            "Veuillez charger les données PAX dans la **Configuration**."
+        )
         st.stop()
 
-    st.markdown("—")
-    st.subheader("Paramètres de ciblage")
+    # Section 1: Réception des ajustements depuis Simulateur
+    with st.container(border=True):
+        st.subheader("📥 Objectif d'Ajustement")
 
-    # Heures à ajuster : récup depuis Simulateur (catégorie AT)
-    sim_delta_h = _get_simulated_hour_delta_from_simulateur()
-    if sim_delta_h == 0.0:
-        st.info("Aucun ajustement d'heures AT détecté depuis le Simulateur d’Objectif (catégorie AT). "
-                "Vous pouvez quand même saisir un objectif manuel ci-dessous.")
-    colp1, colp2, colp3 = st.columns([1,1,1])
-    with colp1:
-        hours_target = st.number_input(
-            "Objectif d'ajustement (heures, + pour AJOUTER / − pour RETIRER)",
-            value=float(sim_delta_h),
-            step=10.0,
-            format="%.0f"
-        )
-    with colp2:
-        per_day_step = st.number_input(
-            "Pas par jour (h)",
-            value=2.0, step=0.5, min_value=0.5, format="%.1f",
-            help="Quantité d'heures à proposer par jour sélectionné (sera plafonnée par l’objectif)."
-        )
-    with colp3:
-        max_days = st.number_input(
-            "Nombre max. de jours proposés",
-            value=20, min_value=1, step=1
-        )
-
-    # Rappels KPI
-    st.markdown("—")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Jours filtrés", f"{len(dff):,}".replace(",", " "))
-    with c2:
-        st.metric("PAX moyen / jour", f"{dff['Pax_Total'].mean():,.0f}".replace(",", " "))
-    with c3:
-        st.metric("Heures AT moy. / jour", f"{dff['Heures_AT'].mean():,.1f} h".replace(",", " "))
-
-    # Action
-    st.markdown("—")
-    if st.button("🎯 Proposer des jours cibles (AT/PAX)"):
-        if hours_target == 0:
-            st.warning("Objectif à 0h — rien à proposer.")
+        if 'ajustement_propose' not in st.session_state or \
+           st.session_state.ajustement_propose is None:
+            st.info(
+                "Aucun ajustement en attente. Utilisez le **Simulateur d'Objectif** "
+                "pour définir un objectif, puis cliquez sur 'Envoyer vers Assistant Besoin Jour'."
+            )
+            st.stop()
         else:
-            # Choisir jours
-            ranked = dff.sort_values(
-                "Ratio_AT_par_1000PAX",
-                ascending=True if hours_target > 0 else False
-            ).copy()
-            # On sélectionne jusqu’à max_days, mais le delta réel est packé avec _pick_days
-            ranked = ranked.head(int(max_days)).copy()
+            ajustement: AjustementPropose = st.session_state.ajustement_propose
 
-            picked = _pick_days(ranked, hours_target, per_day_step)
-            if picked.empty:
-                st.warning("Impossible de construire des propositions avec les paramètres actuels.")
-            else:
-                # Sauvegarde suggestions et mini-ops
-                suggestions = picked[[
-                    "Date","Jour_FR","Mois_FR","Saison","Pax_Total","Heures_AT","Ratio_AT_par_1000PAX","Delta_Heures"
-                ]].copy()
+            # Afficher l'objectif reçu
+            st.markdown(f"**Objectif Total:** {ajustement.total_delta_chf:+,.0f} CHF")
+            st.caption(f"Reçu le: {ajustement.timestamp}")
 
-                st.session_state["besoin_jour_assistant_suggestions"] = suggestions.copy()
-
-                # Construire un format d'opérations simple (à consommer par la page Besoin Jour si besoin)
-                ops = []
-                for r in suggestions.itertuples(index=False):
-                    ops.append({
-                        "date": pd.to_datetime(r.Date).date().isoformat(),
-                        "category": "AT",
-                        "delta_hours": float(r.Delta_Heures),
-                        "reason": "Assistant AT/PAX",
-                        "context": {
-                            "pax": float(r.Pax_Total),
-                            "heures_at": float(r.Heures_AT),
-                            "ratio_at_per_1000pax": float(r.Ratio_AT_par_1000PAX)
-                        }
+            # Afficher la répartition par catégorie
+            if ajustement.distribution:
+                st.markdown("**Répartition par Catégorie:**")
+                distrib_data = []
+                for cat, data in ajustement.distribution.items():
+                    distrib_data.append({
+                        'Catégorie': cat,
+                        'Ajustement CHF': f"{data['delta_chf']:+,.0f}",
+                        'Ajustement Heures': f"{data['delta_hours']:+,.0f}",
+                        'Part (%)': f"{data['percentage']:.1f}"
                     })
-                st.session_state["besoin_jour_assistant_ops"] = ops
+                distrib_df = pd.DataFrame(distrib_data)
+                st.dataframe(distrib_df, hide_index=True, use_container_width=True)
 
-                st.success(f"{len(suggestions)} jours proposés. Voir le tableau ci-dessous.")
-                st.dataframe(
-                    suggestions,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Date": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                        "Pax_Total": st.column_config.NumberColumn("PAX", format="%.0f"),
-                        "Heures_AT": st.column_config.NumberColumn("Heures AT", format="%.1f h"),
-                        "Ratio_AT_par_1000PAX": st.column_config.NumberColumn("AT / 1000 PAX", format="%.2f"),
-                        "Delta_Heures": st.column_config.NumberColumn("Δ Heures (proposé)", format="%.1f h"),
-                    }
+            # Afficher les verrous
+            if ajustement.locks:
+                with st.expander("🔒 Verrous Actifs"):
+                    locked_cats = ajustement.locks.get('categories', [])
+                    locked_perims = ajustement.locks.get('perimetres', [])
+                    locked_dates = ajustement.locks.get('dates', [])
+
+                    if locked_cats:
+                        st.markdown(f"**Catégories verrouillées:** {', '.join(locked_cats)}")
+                    if locked_perims:
+                        st.markdown(f"**Périmètres verrouillés:** {', '.join(locked_perims)}")
+                    if locked_dates:
+                        dates_str = [_date_to_str(d) for d in locked_dates[:5]]
+                        if len(locked_dates) > 5:
+                            dates_str.append(f"... (+{len(locked_dates)-5} autres)")
+                        st.markdown(f"**Dates verrouillées:** {', '.join(dates_str)}")
+
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("🗑️ Annuler cet Ajustement", type="secondary", use_container_width=True):
+                    st.session_state.ajustement_propose = None
+                    st.session_state.generated_suggestions = None
+                    st.rerun()
+            with col2:
+                if st.button("🔄 Actualiser depuis Simulateur", type="secondary", use_container_width=True):
+                    st.info("Retournez au Simulateur d'Objectif pour mettre à jour l'ajustement.")
+
+    # Section 2: Configuration des Suggestions
+    with st.container(border=True):
+        st.subheader("⚙️ Configuration du Moteur de Suggestions")
+
+        with st.expander("Paramètres Avancés", expanded=False):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**Contraintes Opérationnelles:**")
+                min_agents = st.number_input(
+                    "Minimum d'agents par slot (30min)",
+                    min_value=0,
+                    max_value=10,
+                    value=1,
+                    key="config_min_agents"
+                )
+                max_agents = st.number_input(
+                    "Maximum d'agents par slot (0 = illimité)",
+                    min_value=0,
+                    max_value=50,
+                    value=0,
+                    key="config_max_agents"
+                )
+                max_agents_val = max_agents if max_agents > 0 else None
+
+                min_block = st.number_input(
+                    "Bloc minimum d'heures consécutives",
+                    min_value=0.5,
+                    max_value=8.0,
+                    value=1.0,
+                    step=0.5,
+                    key="config_min_block"
                 )
 
-                st.download_button(
-                    "⬇️ Exporter les suggestions (CSV)",
-                    data=suggestions.to_csv(index=False).encode("utf-8"),
-                    file_name="assistant_besoin_jour_suggestions.csv",
-                    mime="text/csv",
-                    use_container_width=True
+            with col2:
+                st.markdown("**Pondérations des Critères (%):**")
+                w_pax = st.slider(
+                    "Intensité PAX",
+                    min_value=0,
+                    max_value=100,
+                    value=40,
+                    key="config_w_pax"
+                )
+                w_ratio = st.slider(
+                    "Efficacité Ratio PAX/Agent",
+                    min_value=0,
+                    max_value=100,
+                    value=35,
+                    key="config_w_ratio"
+                )
+                w_var = st.slider(
+                    "Stabilité (faible variance)",
+                    min_value=0,
+                    max_value=100,
+                    value=25,
+                    key="config_w_var"
                 )
 
-                st.download_button(
-                    "⬇️ Exporter les opérations (JSON)",
-                    data=pd.Series(ops).to_json(orient="values").encode("utf-8"),
-                    file_name="assistant_besoin_jour_ops.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
+                total_weight = w_pax + w_ratio + w_var
+                if total_weight != 100:
+                    st.warning(f"Total des pondérations: {total_weight}% (devrait être 100%)")
 
-    # Afficher dernières suggestions si présentes
-    if "besoin_jour_assistant_suggestions" in st.session_state:
-        st.markdown("---")
-        st.subheader("Dernières suggestions générées")
-        s = st.session_state["besoin_jour_assistant_suggestions"]
-        st.dataframe(
-            s,
-            use_container_width=True,
-            hide_index=True
+            strict_delta = st.checkbox(
+                "Respecter strictement le delta d'heures (sinon priorité au delta CHF)",
+                value=False,
+                key="config_strict_delta"
+            )
+
+    # Section 3: Génération des Suggestions
+    with st.container(border=True):
+        st.subheader("🧠 Génération des Suggestions")
+
+        if st.button("🚀 Générer les Suggestions", type="primary", use_container_width=True):
+            with st.spinner("Analyse des données PAX et génération des suggestions..."):
+                try:
+                    ajustement: AjustementPropose = st.session_state.ajustement_propose
+
+                    # Construire la configuration
+                    config = SuggestionConfig(
+                        min_block_hours=min_block,
+                        min_agents_per_slot=min_agents,
+                        max_agents_per_slot=max_agents_val,
+                        penalty_events=0.5,
+                        weights={
+                            'pax_intensity': w_pax / 100.0,
+                            'ratio_efficiency': w_ratio / 100.0,
+                            'variance_stability': w_var / 100.0
+                        },
+                        locked_categories=ajustement.locks.get('categories', []),
+                        locked_perimetres=ajustement.locks.get('perimetres', []),
+                        locked_dates=ajustement.locks.get('dates', []),
+                        respect_strict_delta=strict_delta
+                    )
+
+                    # Générer les suggestions
+                    suggestions_dict = generate_suggestions(ajustement, config, year)
+
+                    # Stocker en session_state
+                    st.session_state.generated_suggestions = suggestions_dict
+                    st.session_state.suggestions_config = config
+
+                    total_suggestions = sum(len(suggs) for suggs in suggestions_dict.values())
+                    st.success(f"✅ {total_suggestions} suggestion(s) générée(s) avec succès!")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la génération des suggestions: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+    # Section 4: Affichage des Suggestions
+    if 'generated_suggestions' in st.session_state and \
+       st.session_state.generated_suggestions:
+
+        suggestions_dict: Dict[str, List[Suggestion]] = st.session_state.generated_suggestions
+
+        with st.container(border=True):
+            st.subheader("📋 Suggestions Générées")
+
+            # Tabs par catégorie
+            categories = list(suggestions_dict.keys())
+            if len(categories) == 0:
+                st.info("Aucune suggestion générée.")
+            else:
+                tabs = st.tabs(categories)
+
+                for idx, category in enumerate(categories):
+                    with tabs[idx]:
+                        suggestions = suggestions_dict[category]
+
+                        if not suggestions:
+                            st.info(f"Aucune suggestion pour la catégorie {category}.")
+                            continue
+
+                        # Calculer totaux
+                        total_delta_hours = sum(s.delta_hours for s in suggestions)
+                        total_delta_chf = sum(s.delta_chf for s in suggestions)
+
+                        # Afficher totaux
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric(
+                                "Nombre de Suggestions",
+                                len(suggestions)
+                            )
+                        with col2:
+                            st.metric(
+                                "Total Ajustement Heures",
+                                f"{total_delta_hours:+,.1f} h"
+                            )
+                        with col3:
+                            st.metric(
+                                "Total Ajustement CHF",
+                                f"{total_delta_chf:+,.0f} CHF"
+                            )
+
+                        st.divider()
+
+                        # Afficher les suggestions sous forme de tableau interactif
+                        display_data = []
+                        for i, sugg in enumerate(suggestions):
+                            display_data.append({
+                                'ID': i + 1,
+                                'Date': _date_to_str(sugg.date),
+                                'Période': sugg.periode,
+                                'Périmètre': sugg.perimetre,
+                                'Δ Heures': f"{sugg.delta_hours:+.1f}",
+                                'Δ CHF': f"{sugg.delta_chf:+,.0f}",
+                                'Score': f"{sugg.score:.3f}",
+                                'Motifs': " | ".join(sugg.motifs[:2]),  # Limiter à 2 motifs
+                                'Conflits': " | ".join(sugg.conflits) if sugg.conflits else "—"
+                            })
+
+                        df_display = pd.DataFrame(display_data)
+                        st.dataframe(
+                            df_display,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=min(400, (len(suggestions) + 1) * 35 + 3)
+                        )
+
+                        # Détails expandables
+                        with st.expander("📊 Détails des Suggestions"):
+                            for i, sugg in enumerate(suggestions):
+                                with st.container():
+                                    st.markdown(f"""
+                                    **#{i+1} - {_date_to_str(sugg.date)} | {sugg.periode} | {sugg.perimetre}**
+                                    - **Ajustement:** {sugg.delta_hours:+.1f} h / {sugg.delta_chf:+,.0f} CHF
+                                    - **Score de priorité:** {sugg.score:.3f}
+                                    - **Motifs:** {', '.join(sugg.motifs)}
+                                    - **Conflits:** {', '.join(sugg.conflits) if sugg.conflits else 'Aucun'}
+                                    """)
+                                    st.divider()
+
+                        st.divider()
+
+                        # Actions
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button(
+                                f"✅ Appliquer Toutes les Suggestions ({category})",
+                                type="primary",
+                                key=f"apply_all_{category}",
+                                use_container_width=True
+                            ):
+                                with st.spinner("Application des suggestions..."):
+                                    result = apply_suggestions(suggestions, category)
+                                    if result.get('success'):
+                                        st.success(
+                                            f"✅ {result['rules_created']} règle(s) créée(s) "
+                                            f"dans Besoin Jour: "
+                                            f"{result['totaux']['hours']:+,.1f} h / "
+                                            f"{result['totaux']['chf']:+,.0f} CHF"
+                                        )
+                                        # Nettoyer l'ajustement proposé
+                                        st.session_state.ajustement_propose = None
+                                        st.session_state.generated_suggestions = None
+                                        st.balloons()
+                                        st.info(
+                                            "🔄 Rendez-vous sur la page **Besoin Jour** "
+                                            "pour voir les règles appliquées."
+                                        )
+                                    else:
+                                        st.error(f"❌ {result.get('message', 'Erreur inconnue')}")
+
+                        with col2:
+                            if st.button(
+                                f"🗑️ Rejeter Ces Suggestions ({category})",
+                                type="secondary",
+                                key=f"reject_{category}",
+                                use_container_width=True
+                            ):
+                                del st.session_state.generated_suggestions[category]
+                                st.success(f"Suggestions pour {category} rejetées.")
+                                st.rerun()
+
+    # Section 5: Historique des Applications (V2)
+    with st.expander("📜 Historique des Applications (À venir - V2)"):
+        st.info(
+            "Cette section affichera l'historique des suggestions appliquées, "
+            "avec possibilité d'annuler et snapshots avant/après."
         )
-
-
-if __name__ == "__main__":
-    render_besoin_jour_assistant_page()

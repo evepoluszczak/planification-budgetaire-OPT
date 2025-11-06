@@ -1,27 +1,22 @@
-# app.py
 import datetime as dt
 import re
 import pandas as pd
 import streamlit as st
-from zoneinfo import ZoneInfo
 
 # Imports des modules custom
 from config.settings import configure_streamlit, render_gva_header
-from config.constants import (
-    RULES_BESOIN_JOUR_PATH, PAX_DATA_FILE_PATH, FACTU_AT_DIR,
-    PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH
-)
+from config.constants import (RULES_BESOIN_JOUR_PATH, PAX_DATA_FILE_PATH, FACTU_AT_DIR,
+                              PAX_FORECAST_FILE_PATH, PAX_HISTORICAL_FILE_PATH)
 from models.session_state import initialize_session_state_2026
 from core.budget import generate_budget_state
 from core.data_loader import load_pax_data
 from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import start_pax_loading, check_pax_loading_status, get_pax_loading_info
-from utils.autosave import (
-    save_session_state_auto, load_session_state_auto, autosave_exists,
-    get_autosave_info, list_all_autosaves, has_session_changed
-)
+from utils.autosave import (save_session_state_auto, load_session_state_auto, autosave_exists,
+                             get_autosave_info, list_all_autosaves, has_session_changed)
 from ui.components import show_help_dialog, planning_editor_ui
+from zoneinfo import ZoneInfo
 
 # =================== Configuration initiale ===================
 configure_streamlit()
@@ -37,8 +32,12 @@ if 'show_help_dialog' not in st.session_state:
     st.session_state.show_help_dialog = False
 
 # =================== Initialisation du chargement PAX ===================
+# Initialiser l'état du chargement PAX si nécessaire
 if 'pax_loading_status' not in st.session_state:
     st.session_state.pax_loading_status = 'idle'
+
+# Note: Le chargement automatique PAX a été désactivé au profit du chargement manuel
+# via le bouton dans la sidebar pour ne pas bloquer l'application au démarrage
 
 # =================== Affichage principal ===================
 render_gva_header()
@@ -53,8 +52,12 @@ if not st.session_state.data_loaded:
     # Masquer la sidebar sur l'écran d'accueil
     st.markdown("""
         <style>
-        [data-testid="stSidebar"] { display: none; }
-        [data-testid="collapsedControl"] { display: none; }
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        [data-testid="collapsedControl"] {
+            display: none;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -181,7 +184,7 @@ else:
                 else:
                     # Indiquer qu'aucun changement n'a été détecté
                     st.session_state.last_autosave_status = "○ Aucun changement"
-            except Exception:
+            except Exception as e:
                 # Ne pas perturber l'utilisateur avec les erreurs d'autosave
                 st.session_state.last_autosave_status = "✗ Erreur"
                 pass
@@ -196,6 +199,7 @@ else:
         st.rerun()
 
     # Sidebar : Navigation et Export
+
     with st.sidebar:
         st.title("Navigation")
 
@@ -236,8 +240,7 @@ else:
         if st.button("Simulateur Objectif", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
             change_page("Simulateur Objectif")
-        # >>> NOUVEAU : Assistant Besoin Jour
-        if st.button("Assistant Besoin Jour", use_container_width=True,
+        if st.button("🤖 Assistant Besoin Jour", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Assistant Besoin Jour" else "secondary"):
             change_page("Assistant Besoin Jour")
 
@@ -302,11 +305,11 @@ else:
 
             elif loading_status == 'error':
                 error_msg = pax_info.get('error', 'Erreur inconnue')
-
+            
                 # Drapeau de masquage
                 if "pax_error_dismissed" not in st.session_state:
                     st.session_state.pax_error_dismissed = False
-
+            
                 if not st.session_state.pax_error_dismissed:
                     with st.container(border=True):
                         st.error("❌ Erreur de chargement")
@@ -325,6 +328,7 @@ else:
                                             st.code(v or "—", language="python")
                 else:
                     st.caption("Erreur de chargement masquée (cliquez Recharger pour réessayer).")
+
 
         # Afficher le fragment de polling
         pax_loading_status_fragment()
@@ -416,6 +420,9 @@ else:
 
     # =================== Affichage des pages ===================
 
+    # Les pages sont importées depuis des modules séparés ou définies inline
+    # Pour simplifier, on garde certaines pages inline mais bien structurées
+
     if page == "Configuration":
         from ui.pages.configuration import render_configuration_page
         render_configuration_page()
@@ -460,6 +467,6 @@ else:
         render_simulateur_objectif_page()
 
     elif page == "Assistant Besoin Jour":
-        # >>> branchement de la nouvelle page d'assistance
-        from ui.pages.assistant_besoin_jour import render_besoin_jour_assistant_page
-        render_besoin_jour_assistant_page()
+        from ui.pages.assistant_besoin_jour import render_assistant_besoin_jour_page
+        render_assistant_besoin_jour_page()
+

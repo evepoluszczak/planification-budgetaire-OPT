@@ -17,6 +17,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import altair as alt
+from datetime import datetime
+
+from models.suggestion import AjustementPropose
 
 
 # =========================
@@ -736,7 +739,79 @@ def render_simulateur_objectif_page():
         
                 except Exception as e:
                     st.warning(f"Comparaison : affichage du graphique indisponible ({e}).")
-                    # On n’empêche pas la page de fonctionner — le tableau ci-dessus reste utile.
+                    # On n'empêche pas la page de fonctionner — le tableau ci-dessus reste utile.
+
+        st.divider()
+
+        # ==== Intégration Assistant Besoin Jour ====
+        st.subheader("🤖 Assistant Besoin Jour")
+        st.markdown(
+            "Envoyez ces résultats à l'**Assistant Besoin Jour** pour obtenir "
+            "des suggestions automatiques basées sur les données PAX et votre planning."
+        )
+
+        col_assist1, col_assist2 = st.columns([3, 1])
+        with col_assist1:
+            with st.expander("⚙️ Options Avancées (Verrous)"):
+                st.markdown(
+                    "Les verrous empêchent l'assistant de modifier certains "
+                    "périmètres ou dates spécifiques."
+                )
+                locked_perimetres_assist = st.multiselect(
+                    "Verrouiller des périmètres (AT)",
+                    options=st.session_state.get("perimetres", {}).get("AT", []),
+                    default=[],
+                    key="locked_perimetres_assist"
+                )
+
+        with col_assist2:
+            if st.button(
+                "📤 Envoyer vers Assistant",
+                type="primary",
+                use_container_width=True,
+                key="send_to_assistant_btn"
+            ):
+                # Créer l'objet AjustementPropose
+                distribution = {}
+                for _, row in results_df.iterrows():
+                    cat = str(row['Catégorie'])
+                    delta_h = row.get('Ajustement Heures (h)', 0)
+                    delta_c = row.get('Ajustement Coût (CHF)', 0)
+                    part_p = row.get('Part Répartition (%)', 0)
+
+                    # Gérer les NaN
+                    delta_h = float(delta_h) if pd.notna(delta_h) else 0.0
+                    delta_c = float(delta_c) if pd.notna(delta_c) else 0.0
+                    part_p = float(part_p) if pd.notna(part_p) else 0.0
+
+                    distribution[cat] = {
+                        'delta_hours': delta_h,
+                        'delta_chf': delta_c,
+                        'percentage': part_p
+                    }
+
+                total_hours = results_df['Ajustement Heures (h)'].fillna(0).sum()
+
+                ajustement = AjustementPropose(
+                    total_delta_hours=float(total_hours),
+                    total_delta_chf=float(target_adjustment),
+                    distribution=distribution,
+                    locks={
+                        'categories': list(locked_cats) if 'locked_cats' in locals() else [],
+                        'perimetres': locked_perimetres_assist,
+                        'dates': []
+                    },
+                    timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
+
+                # Stocker dans session_state
+                st.session_state.ajustement_propose = ajustement
+
+                st.success(
+                    "✅ Ajustement envoyé à l'Assistant Besoin Jour ! "
+                    "Rendez-vous sur la page **Assistant Besoin Jour** pour générer les suggestions."
+                )
+                st.balloons()
 
 
     # Aide
