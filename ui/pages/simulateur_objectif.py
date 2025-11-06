@@ -4,6 +4,9 @@ Page Simulateur Objectif - Simulation d'objectifs de coût
 import numpy as np
 import pandas as pd
 import streamlit as st
+from datetime import datetime
+
+from models.suggestion import AjustementPropose
 
 
 def render_simulateur_objectif_page():
@@ -242,5 +245,69 @@ def render_simulateur_objectif_page():
                     hide_index=True,
                     use_container_width=True
                 )
+
+                st.divider()
+
+                # Bouton pour envoyer vers Assistant Besoin Jour
+                st.subheader("🤖 Assistant Besoin Jour")
+                st.markdown(
+                    "Envoyez cet ajustement à l'**Assistant Besoin Jour** pour obtenir "
+                    "des suggestions automatiques basées sur les données PAX et votre planning."
+                )
+
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    # Options de verrous (optionnel)
+                    with st.expander("⚙️ Options Avancées (Verrous)"):
+                        st.markdown(
+                            "Les verrous empêchent l'assistant de modifier certains "
+                            "périmètres ou dates spécifiques."
+                        )
+                        locked_perimetres = st.multiselect(
+                            "Verrouiller des périmètres (AT)",
+                            options=st.session_state.perimetres.get("AT", []),
+                            default=[],
+                            key="locked_perimetres"
+                        )
+                        # TODO V2: Ajouter sélection de dates verrouillées
+
+                with col2:
+                    if st.button(
+                        "📤 Envoyer vers Assistant",
+                        type="primary",
+                        use_container_width=True,
+                        key="send_to_assistant_btn"
+                    ):
+                        # Créer l'objet AjustementPropose
+                        distribution = {}
+                        for _, row in results_df.iterrows():
+                            cat = row['Catégorie']
+                            distribution[cat] = {
+                                'delta_hours': float(row['Ajustement Heures (h)']),
+                                'delta_chf': float(row['Ajustement Coût (CHF)']),
+                                'percentage': float(row['Part Répartition (%)'])
+                            }
+
+                        ajustement = AjustementPropose(
+                            total_delta_hours=float(results_df['Ajustement Heures (h)'].sum()),
+                            total_delta_chf=float(target_adjustment),
+                            distribution=distribution,
+                            locks={
+                                'categories': [],  # Pas de verrous catégories dans V1
+                                'perimetres': locked_perimetres if 'locked_perimetres' in locals() else [],
+                                'dates': []  # TODO V2
+                            },
+                            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        )
+
+                        # Stocker dans session_state
+                        st.session_state.ajustement_propose = ajustement
+
+                        st.success(
+                            "✅ Ajustement envoyé à l'Assistant Besoin Jour ! "
+                            "Rendez-vous sur la page **Assistant Besoin Jour** pour générer les suggestions."
+                        )
+                        st.balloons()
+
         else:
             st.info("Saisissez un objectif d'ajustement non nul pour lancer la simulation.")

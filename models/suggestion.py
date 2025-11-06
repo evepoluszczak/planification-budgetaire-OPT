@@ -181,38 +181,48 @@ class AjustementPropose:
     Structure du paquet d'ajustement envoyé par le Simulateur
 
     Attributes:
-        meta: Métadonnées (année, source, date de création, objectif global)
-        by_category: Delta par catégorie de personnel
-        locks: Verrous définis par l'utilisateur
+        total_delta_hours: Total d'heures à ajuster (négatif pour réduire)
+        total_delta_chf: Total CHF à ajuster (négatif pour réduire)
+        distribution: Répartition par catégorie {category: {delta_hours, delta_chf, percentage}}
+        locks: Verrous définis par l'utilisateur {categories: [], perimetres: [], dates: []}
+        timestamp: Horodatage de création
     """
-    meta: Dict[str, Any]
-    by_category: Dict[str, Dict[str, float]]  # {category: {delta_chf, delta_hours}}
-    locks: Dict[str, List[str]]  # {categories: [], perimetres: [], dates: []}
+    total_delta_hours: float
+    total_delta_chf: float
+    distribution: Dict[str, Dict[str, float]]
+    locks: Dict[str, List[str]] = field(default_factory=lambda: {
+        'categories': [], 'perimetres': [], 'dates': []
+    })
+    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convertit en dictionnaire"""
         return {
-            'meta': self.meta,
-            'by_category': self.by_category,
-            'locks': self.locks
+            'total_delta_hours': self.total_delta_hours,
+            'total_delta_chf': self.total_delta_chf,
+            'distribution': self.distribution,
+            'locks': self.locks,
+            'timestamp': self.timestamp
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'AjustementPropose':
         """Crée depuis un dictionnaire"""
         return cls(
-            meta=data.get('meta', {}),
-            by_category=data.get('by_category', {}),
-            locks=data.get('locks', {'categories': [], 'perimetres': [], 'dates': []})
+            total_delta_hours=data.get('total_delta_hours', 0.0),
+            total_delta_chf=data.get('total_delta_chf', 0.0),
+            distribution=data.get('distribution', {}),
+            locks=data.get('locks', {'categories': [], 'perimetres': [], 'dates': []}),
+            timestamp=data.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         )
 
     def get_category_delta_hours(self, category: str) -> float:
         """Récupère le delta d'heures pour une catégorie"""
-        return self.by_category.get(category, {}).get('delta_hours', 0.0)
+        return self.distribution.get(category, {}).get('delta_hours', 0.0)
 
     def get_category_delta_chf(self, category: str) -> float:
         """Récupère le delta CHF pour une catégorie"""
-        return self.by_category.get(category, {}).get('delta_chf', 0.0)
+        return self.distribution.get(category, {}).get('delta_chf', 0.0)
 
 
 def generate_application_id(year: int, sequence: int) -> str:

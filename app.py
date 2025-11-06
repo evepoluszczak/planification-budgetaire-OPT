@@ -240,6 +240,9 @@ else:
         if st.button("Simulateur Objectif", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Simulateur Objectif" else "secondary"):
             change_page("Simulateur Objectif")
+        if st.button("🤖 Assistant Besoin Jour", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Assistant Besoin Jour" else "secondary"):
+            change_page("Assistant Besoin Jour")
 
         page = st.session_state.selected_page
 
@@ -462,4 +465,8 @@ else:
     elif page == "Simulateur Objectif":
         from ui.pages.simulateur_objectif import render_simulateur_objectif_page
         render_simulateur_objectif_page()
+
+    elif page == "Assistant Besoin Jour":
+        from ui.pages.assistant_besoin_jour import render_assistant_besoin_jour_page
+        render_assistant_besoin_jour_page()
 
