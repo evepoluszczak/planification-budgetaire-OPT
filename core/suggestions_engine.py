@@ -80,19 +80,24 @@ def load_and_prepare_grids(
 
     # Dates par défaut : limiter à une fenêtre raisonnable
     today = datetime.now().date()
-    if start_date is None:
-        # Commencer à partir d'aujourd'hui ou début d'année si aujourd'hui n'est pas dans l'année
-        start_of_year = date(year, 1, 1)
-        end_of_year = date(year, 12, 31)
+    start_of_year = date(year, 1, 1)
+    end_of_year = date(year, 12, 31)
 
+    if start_date is None:
+        # Commencer à partir d'aujourd'hui si dans l'année, sinon début d'année
         if start_of_year <= today <= end_of_year:
             start_date = today
         else:
-            start_date = start_of_year
+            # Si l'année du budget est dans le futur, commencer au début
+            if year > today.year:
+                start_date = start_of_year
+            # Si l'année du budget est dans le passé, commencer quand même au début
+            else:
+                start_date = start_of_year
 
     if end_date is None:
         # Limiter à max_days jours après start_date
-        end_date = min(start_date + timedelta(days=max_days), date(year, 12, 31))
+        end_date = min(start_date + timedelta(days=max_days), end_of_year)
 
     # Sécurité: limiter la plage totale
     days_span = (end_date - start_date).days
@@ -496,7 +501,11 @@ def generate_suggestions(
     df_consolidated = load_and_prepare_grids(config_with_locks, year, max_days=max_days)
 
     if df_consolidated.empty:
+        st.warning("⚠️ Aucune donnée de planification trouvée pour la période analysée.")
         return {category: []}
+
+    # Diagnostic
+    st.info(f"📊 Données chargées : {len(df_consolidated)} slots analysés sur {len(df_consolidated['date'].unique())} jours")
 
     # 2. Calculer features
     df_with_features = compute_slot_features(df_consolidated, config_with_locks)
@@ -504,6 +513,14 @@ def generate_suggestions(
     # 3. Scorer les slots
     objective = 'remove' if delta_hours < 0 else 'add'
     df_scored = score_slots(df_with_features, config_with_locks, objective=objective)
+
+    # Diagnostic
+    eligible_count = df_scored['eligible'].sum()
+    st.info(f"📊 Slots éligibles : {eligible_count} / {len(df_scored)} (objectif: {objective}, delta: {delta_hours:+.1f}h / {delta_chf:+.0f} CHF)")
+
+    if eligible_count == 0:
+        st.warning(f"⚠️ Aucun slot éligible trouvé. Vérifiez les contraintes (min_agents={config_with_locks.min_agents_per_slot})")
+        return {category: []}
 
     # 4. Allouer via greedy
     suggestions = allocate_delta_greedy(
@@ -514,6 +531,14 @@ def generate_suggestions(
         category=category,
         hourly_rate=hourly_rate
     )
+
+    # Diagnostic final
+    if suggestions:
+        total_h = sum(s.delta_hours for s in suggestions)
+        total_c = sum(s.delta_chf for s in suggestions)
+        st.success(f"✅ {len(suggestions)} suggestion(s) générée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF")
+    else:
+        st.warning(f"⚠️ L'algorithme greedy n'a généré aucune suggestion. L'objectif ({delta_hours:+.1f}h) est peut-être trop ambitieux pour la période analysée.")
 
     results[category] = suggestions
 
