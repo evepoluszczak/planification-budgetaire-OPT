@@ -49,7 +49,8 @@ def load_and_prepare_grids(
     config: SuggestionConfig,
     year: int,
     start_date: Optional[date] = None,
-    end_date: Optional[date] = None
+    end_date: Optional[date] = None,
+    max_days: int = 30
 ) -> pd.DataFrame:
     """
     Charge et prépare les grilles de planification avec données PAX
@@ -57,8 +58,9 @@ def load_and_prepare_grids(
     Args:
         config: Configuration des suggestions
         year: Année concernée
-        start_date: Date de début (optionnel, sinon toute l'année)
-        end_date: Date de fin (optionnel, sinon toute l'année)
+        start_date: Date de début (optionnel, défaut: aujourd'hui)
+        end_date: Date de fin (optionnel, défaut: start_date + max_days)
+        max_days: Nombre maximum de jours à analyser (défaut: 30)
 
     Returns:
         DataFrame consolidé avec colonnes:
@@ -70,15 +72,33 @@ def load_and_prepare_grids(
         - pax_schengen, pax_non_schengen, pax_total
         - ratio_pax_per_agent
     """
+    from datetime import datetime, timedelta
+
     bs = st.session_state.get('budget_state', {})
     if not bs or 'calendar_df' not in bs or bs['calendar_df'].empty:
         raise ValueError("Budget state non initialisé. Générez d'abord un budget annuel.")
 
-    # Dates par défaut
+    # Dates par défaut : limiter à une fenêtre raisonnable
+    today = datetime.now().date()
     if start_date is None:
-        start_date = date(year, 1, 1)
+        # Commencer à partir d'aujourd'hui ou début d'année si aujourd'hui n'est pas dans l'année
+        start_of_year = date(year, 1, 1)
+        end_of_year = date(year, 12, 31)
+
+        if start_of_year <= today <= end_of_year:
+            start_date = today
+        else:
+            start_date = start_of_year
+
     if end_date is None:
-        end_date = date(year, 12, 31)
+        # Limiter à max_days jours après start_date
+        end_date = min(start_date + timedelta(days=max_days), date(year, 12, 31))
+
+    # Sécurité: limiter la plage totale
+    days_span = (end_date - start_date).days
+    if days_span > max_days:
+        end_date = start_date + timedelta(days=max_days)
+        st.warning(f"⚠️ Plage limitée à {max_days} jours pour des raisons de performance.")
 
     # Charger calendar
     calendar_df = bs['calendar_df'].copy()
@@ -98,14 +118,35 @@ def load_and_prepare_grids(
     time_slots = TIME_SLOTS
     planning_dict_at = st.session_state.planning_data.get("AT", {})
 
+    # Créer un dictionnaire de lookup PAX pour accès rapide
+    pax_lookup = {}
+    if not pax_df.empty:
+        for idx in pax_df.index:
+            date_key = idx.date()
+            time_key = idx.time()
+            key = (date_key, time_key)
+            pax_lookup[key] = {
+                'pax_schengen': float(pax_df.loc[idx, 'Pax_Schengen_A'] + pax_df.loc[idx, 'Pax_Schengen_D']),
+                'pax_non_schengen': float(pax_df.loc[idx, 'Pax_NonSchengen_A'] + pax_df.loc[idx, 'Pax_NonSchengen_D'])
+            }
+
     # Construire le DataFrame consolidé
     rows = []
+    total_days = len(calendar_df)
 
-    for _, cal_row in calendar_df.iterrows():
+    # Progress bar
+    progress_bar = st.progress(0, text=f"Analyse de {total_days} jours...")
+
+    for day_idx, (_, cal_row) in enumerate(calendar_df.iterrows()):
         date_val = cal_row['Date']
         jour = cal_row['Jour']
         saison = cal_row['Saison']
         jt = cal_row['Jour_Type_Global']
+
+        # Mise à jour progress bar
+        if day_idx % 5 == 0:  # Mettre à jour tous les 5 jours
+            progress = (day_idx + 1) / total_days
+            progress_bar.progress(progress, text=f"Analyse jour {day_idx + 1}/{total_days}...")
 
         # Vérifier si date verrouillée
         if config.is_locked(date_val=date_val):
@@ -126,31 +167,21 @@ def load_and_prepare_grids(
                 effectif_base = base_grid.loc[perimetre, slot]
                 effectif_actuel = effective_grid.loc[perimetre, slot]
 
-                # Charger PAX pour ce slot
+                # Lookup PAX rapide via dictionnaire
                 pax_schengen = 0.0
                 pax_non_schengen = 0.0
                 pax_total = 0.0
 
-                if not pax_df.empty:
-                    # Trouver les données PAX pour cette date et cette heure
-                    pax_day = pax_df[pax_df.index.date == date_val]
-                    if not pax_day.empty:
-                        # Trouver le slot horaire correspondant (slot = "06:00", "06:30", etc.)
-                        slot_time = pd.to_datetime(f"{date_val} {slot}").time()
-                        pax_slot = pax_day[pax_day.index.time == slot_time]
+                if pax_lookup:
+                    from datetime import datetime
+                    slot_time = datetime.strptime(slot, "%H:%M").time()
+                    key = (date_val, slot_time)
 
-                        if not pax_slot.empty:
-                            # Mapper périmètre à flux PAX
-                            # Par défaut, on agrège Arrivée + Départ pour simplifier V1
-                            pax_schengen = float(
-                                pax_slot['Pax_Schengen_A'].iloc[0] +
-                                pax_slot['Pax_Schengen_D'].iloc[0]
-                            )
-                            pax_non_schengen = float(
-                                pax_slot['Pax_NonSchengen_A'].iloc[0] +
-                                pax_slot['Pax_NonSchengen_D'].iloc[0]
-                            )
-                            pax_total = pax_schengen + pax_non_schengen
+                    if key in pax_lookup:
+                        pax_data = pax_lookup[key]
+                        pax_schengen = pax_data['pax_schengen']
+                        pax_non_schengen = pax_data['pax_non_schengen']
+                        pax_total = pax_schengen + pax_non_schengen
 
                 # Calculer ratio PAX/agent
                 ratio_pax_per_agent = 0.0
@@ -172,6 +203,10 @@ def load_and_prepare_grids(
                     'pax_total': pax_total,
                     'ratio_pax_per_agent': ratio_pax_per_agent
                 })
+
+    # Finaliser progress bar
+    progress_bar.progress(1.0, text="Analyse terminée !")
+    progress_bar.empty()  # Nettoyer
 
     df_consolidated = pd.DataFrame(rows)
     return df_consolidated
@@ -402,7 +437,8 @@ def _get_next_slot(slot: str) -> str:
 def generate_suggestions(
     ajustement: AjustementPropose,
     config: SuggestionConfig,
-    year: int
+    year: int,
+    max_days: int = 30
 ) -> Dict[str, List[Suggestion]]:
     """
     Fonction principale : génère les suggestions d'ajustement
@@ -411,6 +447,7 @@ def generate_suggestions(
         ajustement: Paquet d'ajustement depuis le Simulateur
         config: Configuration des suggestions
         year: Année concernée
+        max_days: Nombre maximum de jours à analyser (défaut: 30)
 
     Returns:
         Dictionnaire {category: [Suggestion, ...]}
@@ -455,8 +492,8 @@ def generate_suggestions(
         respect_strict_delta=config.respect_strict_delta
     )
 
-    # 1. Charger et préparer grilles avec PAX
-    df_consolidated = load_and_prepare_grids(config_with_locks, year)
+    # 1. Charger et préparer grilles avec PAX (avec limite de jours)
+    df_consolidated = load_and_prepare_grids(config_with_locks, year, max_days=max_days)
 
     if df_consolidated.empty:
         return {category: []}
