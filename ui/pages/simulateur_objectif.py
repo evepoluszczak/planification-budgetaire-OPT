@@ -535,7 +535,7 @@ def render_simulateur_objectif_page():
     st.title("Simulateur d'Objectif de Coût")
     st.markdown(
         "Simulez l'impact en heures d'un **ajustement de coût global** (augmentation/réduction) "
-        "en le répartissant sur les catégories. *Ce simulateur n’applique pas les règles Besoin Jour.*"
+        "en le répartissant sur les catégories. *Ce simulateur n'applique pas les règles Besoin Jour.*"
     )
 
     # Pré-requis : Budget généré
@@ -547,6 +547,44 @@ def render_simulateur_objectif_page():
 
     # Base de référence (cohérente avec Analyse / Budget Annuel)
     base_cost_total = _base_cost_total_with_training()
+
+    # Gérer l'import de scénario (avant la création des widgets)
+    if 'pending_scenario_import' in st.session_state:
+        imported_data = st.session_state.pending_scenario_import
+
+        # Supprimer les clés liées aux widgets pour pouvoir les réassigner
+        for key in ['sim_target_adjustment', 'sim_target_percent']:
+            if key in st.session_state:
+                del st.session_state[key]
+
+        # Assigner les nouvelles valeurs
+        st.session_state.sim_target_adjustment = imported_data['target_adjustment']
+        st.session_state.sim_target_percent = (
+            imported_data['target_adjustment'] / base_cost_total * 100.0
+            if base_cost_total > 0 else 0.0
+        )
+
+        # Restaurer la distribution
+        for cat, pct in imported_data['distribution'].items():
+            key = f"distrib_pct_{cat}"
+            if key in st.session_state:
+                del st.session_state[key]
+            st.session_state[key] = float(pct)
+
+        # Restaurer les résultats
+        _save_simulator_results_to_session(
+            results_df=imported_data['results'],
+            target_adjustment=imported_data['target_adjustment'],
+            distribution_pct=imported_data['distribution'],
+            rounding=imported_data['rounding'],
+            cap_pct=imported_data['cap_pct']
+        )
+
+        # Nettoyer la clé temporaire
+        del st.session_state.pending_scenario_import
+
+        st.success(f"✅ Scénario chargé avec succès ! Objectif: {imported_data['target_adjustment']:,.0f} CHF")
+        st.rerun()
 
     st.markdown("---")
     with st.container(border=True):
@@ -860,27 +898,8 @@ def render_simulateur_objectif_page():
                 imported_data = _import_scenario_from_file(uploaded_file)
 
                 if imported_data:
-                    # Restaurer les paramètres dans session_state
-                    st.session_state.sim_target_adjustment = imported_data['target_adjustment']
-                    st.session_state.sim_target_percent = (
-                        imported_data['target_adjustment'] / base_cost_total * 100.0
-                        if base_cost_total > 0 else 0.0
-                    )
-
-                    # Restaurer la distribution dans les widgets
-                    for cat, pct in imported_data['distribution'].items():
-                        st.session_state[f"distrib_pct_{cat}"] = float(pct)
-
-                    # Restaurer les résultats et métadonnées
-                    _save_simulator_results_to_session(
-                        results_df=imported_data['results'],
-                        target_adjustment=imported_data['target_adjustment'],
-                        distribution_pct=imported_data['distribution'],
-                        rounding=imported_data['rounding'],
-                        cap_pct=imported_data['cap_pct']
-                    )
-
-                    st.success(f"✅ Scénario chargé avec succès ! Objectif: {imported_data['target_adjustment']:,.0f} CHF")
+                    # Stocker dans une clé temporaire pour traitement au prochain rendu
+                    st.session_state.pending_scenario_import = imported_data
                     st.rerun()
 
         st.divider()
