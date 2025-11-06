@@ -253,6 +253,19 @@ def render_assistant_besoin_jour_page():
                     with tabs[idx]:
                         suggestions = suggestions_dict[category]
 
+                        # Afficher diagnostics si disponibles
+                        if 'suggestions_diagnostics' in st.session_state and st.session_state.suggestions_diagnostics:
+                            with st.expander("🔍 Diagnostics de Génération", expanded=not suggestions):
+                                for msg_type, msg_text in st.session_state.suggestions_diagnostics:
+                                    if msg_type == "info":
+                                        st.info(f"📊 {msg_text}")
+                                    elif msg_type == "warning":
+                                        st.warning(f"⚠️ {msg_text}")
+                                    elif msg_type == "error":
+                                        st.error(f"❌ {msg_text}")
+                                    elif msg_type == "success":
+                                        st.success(f"✅ {msg_text}")
+
                         if not suggestions:
                             st.info(f"Aucune suggestion pour la catégorie {category}.")
                             continue

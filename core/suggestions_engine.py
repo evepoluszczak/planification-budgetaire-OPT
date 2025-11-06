@@ -500,12 +500,21 @@ def generate_suggestions(
     # 1. Charger et préparer grilles avec PAX (avec limite de jours)
     df_consolidated = load_and_prepare_grids(config_with_locks, year, max_days=max_days)
 
+    # Stocker diagnostics dans session_state
+    if 'suggestions_diagnostics' not in st.session_state:
+        st.session_state.suggestions_diagnostics = []
+
+    diagnostics = []
+
     if df_consolidated.empty:
-        st.warning("⚠️ Aucune donnée de planification trouvée pour la période analysée.")
+        diagnostics.append(("error", "Aucune donnée de planification trouvée pour la période analysée."))
+        st.session_state.suggestions_diagnostics = diagnostics
         return {category: []}
 
-    # Diagnostic
-    st.info(f"📊 Données chargées : {len(df_consolidated)} slots analysés sur {len(df_consolidated['date'].unique())} jours")
+    # Diagnostic 1
+    nb_days = len(df_consolidated['date'].unique())
+    nb_slots = len(df_consolidated)
+    diagnostics.append(("info", f"Données chargées : {nb_slots} slots analysés sur {nb_days} jours"))
 
     # 2. Calculer features
     df_with_features = compute_slot_features(df_consolidated, config_with_locks)
@@ -514,12 +523,13 @@ def generate_suggestions(
     objective = 'remove' if delta_hours < 0 else 'add'
     df_scored = score_slots(df_with_features, config_with_locks, objective=objective)
 
-    # Diagnostic
-    eligible_count = df_scored['eligible'].sum()
-    st.info(f"📊 Slots éligibles : {eligible_count} / {len(df_scored)} (objectif: {objective}, delta: {delta_hours:+.1f}h / {delta_chf:+.0f} CHF)")
+    # Diagnostic 2
+    eligible_count = df_scored['eligible'].sum() if 'eligible' in df_scored.columns else 0
+    diagnostics.append(("info", f"Slots éligibles : {eligible_count} / {len(df_scored)} (objectif: {objective}, delta: {delta_hours:+.1f}h / {delta_chf:+.0f} CHF)"))
 
     if eligible_count == 0:
-        st.warning(f"⚠️ Aucun slot éligible trouvé. Vérifiez les contraintes (min_agents={config_with_locks.min_agents_per_slot})")
+        diagnostics.append(("warning", f"Aucun slot éligible trouvé. Vérifiez les contraintes (min_agents={config_with_locks.min_agents_per_slot}). Essayez de réduire min_agents à 0."))
+        st.session_state.suggestions_diagnostics = diagnostics
         return {category: []}
 
     # 4. Allouer via greedy
@@ -536,10 +546,11 @@ def generate_suggestions(
     if suggestions:
         total_h = sum(s.delta_hours for s in suggestions)
         total_c = sum(s.delta_chf for s in suggestions)
-        st.success(f"✅ {len(suggestions)} suggestion(s) générée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF")
+        diagnostics.append(("success", f"{len(suggestions)} suggestion(s) générée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF"))
     else:
-        st.warning(f"⚠️ L'algorithme greedy n'a généré aucune suggestion. L'objectif ({delta_hours:+.1f}h) est peut-être trop ambitieux pour la période analysée.")
+        diagnostics.append(("warning", f"L'algorithme greedy n'a généré aucune suggestion. L'objectif ({delta_hours:+.1f}h) est peut-être trop ambitieux pour la période analysée."))
 
+    st.session_state.suggestions_diagnostics = diagnostics
     results[category] = suggestions
 
     return results
