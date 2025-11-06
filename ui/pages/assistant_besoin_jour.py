@@ -104,6 +104,19 @@ def render_assistant_besoin_jour_page():
     with st.container(border=True):
         st.subheader("⚙️ Configuration du Moteur de Suggestions")
 
+        # Initialiser valeurs par défaut depuis session_state si elles existent
+        if 'assistant_config' not in st.session_state:
+            st.session_state.assistant_config = {
+                'max_days': 30,
+                'min_agents': 0,
+                'max_agents': 0,
+                'min_block': 1.0,
+                'w_pax': 40,
+                'w_ratio': 35,
+                'w_var': 25,
+                'strict_delta': False
+            }
+
         # Plage d'analyse
         st.markdown("**Plage d'Analyse:**")
         col_days1, col_days2 = st.columns(2)
@@ -112,11 +125,12 @@ def render_assistant_besoin_jour_page():
                 "Nombre de jours à analyser",
                 min_value=1,
                 max_value=365,
-                value=30,
+                value=st.session_state.assistant_config['max_days'],
                 step=1,
                 key="config_max_days",
                 help="Limiter à 30-60 jours pour de meilleures performances"
             )
+            st.session_state.assistant_config['max_days'] = max_days
         with col_days2:
             st.info(f"Analysera environ {max_days} jours × 48 slots × 5 périmètres = ~{max_days * 48 * 5:,} combinaisons")
 
@@ -131,26 +145,30 @@ def render_assistant_besoin_jour_page():
                     "Minimum d'agents par slot (30min)",
                     min_value=0,
                     max_value=10,
-                    value=1,
+                    value=st.session_state.assistant_config['min_agents'],
                     key="config_min_agents"
                 )
+                st.session_state.assistant_config['min_agents'] = min_agents
+
                 max_agents = st.number_input(
                     "Maximum d'agents par slot (0 = illimité)",
                     min_value=0,
                     max_value=50,
-                    value=0,
+                    value=st.session_state.assistant_config['max_agents'],
                     key="config_max_agents"
                 )
+                st.session_state.assistant_config['max_agents'] = max_agents
                 max_agents_val = max_agents if max_agents > 0 else None
 
                 min_block = st.number_input(
                     "Bloc minimum d'heures consécutives",
                     min_value=0.5,
                     max_value=8.0,
-                    value=1.0,
+                    value=st.session_state.assistant_config['min_block'],
                     step=0.5,
                     key="config_min_block"
                 )
+                st.session_state.assistant_config['min_block'] = min_block
 
             with col2:
                 st.markdown("**Pondérations des Critères (%):**")
@@ -158,23 +176,28 @@ def render_assistant_besoin_jour_page():
                     "Intensité PAX",
                     min_value=0,
                     max_value=100,
-                    value=40,
+                    value=st.session_state.assistant_config['w_pax'],
                     key="config_w_pax"
                 )
+                st.session_state.assistant_config['w_pax'] = w_pax
+
                 w_ratio = st.slider(
                     "Efficacité Ratio PAX/Agent",
                     min_value=0,
                     max_value=100,
-                    value=35,
+                    value=st.session_state.assistant_config['w_ratio'],
                     key="config_w_ratio"
                 )
+                st.session_state.assistant_config['w_ratio'] = w_ratio
+
                 w_var = st.slider(
                     "Stabilité (faible variance)",
                     min_value=0,
                     max_value=100,
-                    value=25,
+                    value=st.session_state.assistant_config['w_var'],
                     key="config_w_var"
                 )
+                st.session_state.assistant_config['w_var'] = w_var
 
                 total_weight = w_pax + w_ratio + w_var
                 if total_weight != 100:
@@ -182,9 +205,10 @@ def render_assistant_besoin_jour_page():
 
             strict_delta = st.checkbox(
                 "Respecter strictement le delta d'heures (sinon priorité au delta CHF)",
-                value=False,
+                value=st.session_state.assistant_config['strict_delta'],
                 key="config_strict_delta"
             )
+            st.session_state.assistant_config['strict_delta'] = strict_delta
 
     # Section 3: Génération des Suggestions
     with st.container(border=True):
