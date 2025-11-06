@@ -14,7 +14,8 @@ from core.rules import load_rules_from_json
 from utils.export_import import export_full_state, load_data_from_excel
 from utils.async_loader import (
     start_pax_loading, check_pax_loading_status, get_pax_loading_info,
-    is_pax_data_cached_today, get_pax_cache_info, clear_pax_cache
+    is_pax_data_cached_today, get_pax_cache_info, clear_pax_cache,
+    load_pax_data_from_cache
 )
 from utils.autosave import (save_session_state_auto, load_session_state_auto, autosave_exists,
                              get_autosave_info, list_all_autosaves, has_session_changed)
@@ -286,8 +287,22 @@ else:
         cache_info = get_pax_cache_info()
         is_cached = cache_info['is_cached']
 
+        # Si en cache, restaurer les données depuis le disque si pas dans session_state
+        if is_cached:
+            # Vérifier si les données sont déjà dans session_state
+            has_data_in_session = (
+                st.session_state.get('pax_forecast_status') == 'loaded' or
+                st.session_state.get('pax_historical_status') == 'loaded'
+            )
+            if not has_data_in_session:
+                # Charger depuis le cache disque
+                loaded_from_cache = load_pax_data_from_cache()
+                if not loaded_from_cache:
+                    # Le cache est corrompu, forcer le rechargement
+                    is_cached = False
+
         if not is_cached:
-            # Pas en cache, vérifier si on doit lancer le chargement
+            # Pas en cache (ou cache corrompu), vérifier si on doit lancer le chargement
             loading_status = st.session_state.get('pax_loading_status', 'idle')
 
             # Ne lancer que si status est idle (pas déjà en cours de chargement)
@@ -362,6 +377,11 @@ else:
 
         # Afficher le fragment de polling
         pax_loading_status_fragment()
+
+        # Vérifier si on doit rerun après la fin du chargement
+        if st.session_state.get('pax_needs_rerun', False):
+            st.session_state.pax_needs_rerun = False
+            st.rerun()
 
         # Afficher les informations de dates (toujours visible)
         pax_info = get_pax_loading_info()

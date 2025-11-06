@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import json
+import pickle
 
 
 class PaxLoaderThread(threading.Thread):
@@ -162,6 +163,8 @@ class PaxLoaderThread(threading.Thread):
 
 
 PAX_CACHE_FILE = Path("input_files/.pax_cache_info.json")
+PAX_FORECAST_CACHE = Path("input_files/.pax_forecast_cache.pkl")
+PAX_HISTORICAL_CACHE = Path("input_files/.pax_historical_cache.pkl")
 
 
 def clear_pax_cache():
@@ -171,8 +174,70 @@ def clear_pax_cache():
     try:
         if PAX_CACHE_FILE.exists():
             PAX_CACHE_FILE.unlink()
+        if PAX_FORECAST_CACHE.exists():
+            PAX_FORECAST_CACHE.unlink()
+        if PAX_HISTORICAL_CACHE.exists():
+            PAX_HISTORICAL_CACHE.unlink()
     except Exception:
         pass
+
+
+def _save_pax_data_to_disk(forecast_data=None, historical_data=None):
+    """
+    Sauvegarde les DataFrames PAX sur disque pour réutilisation.
+    """
+    try:
+        if forecast_data is not None:
+            with open(PAX_FORECAST_CACHE, 'wb') as f:
+                pickle.dump(forecast_data, f)
+        if historical_data is not None:
+            with open(PAX_HISTORICAL_CACHE, 'wb') as f:
+                pickle.dump(historical_data, f)
+    except Exception:
+        pass
+
+
+def load_pax_data_from_cache() -> bool:
+    """
+    Charge les données PAX depuis le cache disque si disponible et valide.
+    Retourne True si les données ont été chargées avec succès.
+    """
+    try:
+        cache_info = _read_pax_cache_file()
+        if not cache_info:
+            return False
+
+        # Vérifier que c'est aujourd'hui
+        loaded_date = cache_info.get('loaded_date')
+        if loaded_date != dt.date.today():
+            return False
+
+        # Charger Forecast si disponible
+        if PAX_FORECAST_CACHE.exists():
+            with open(PAX_FORECAST_CACHE, 'rb') as f:
+                forecast_data = pickle.load(f)
+                st.session_state.pax_forecast_data = forecast_data
+                st.session_state.pax_forecast_min_date = forecast_data.index.min().date()
+                st.session_state.pax_forecast_max_date = forecast_data.index.max().date()
+                st.session_state.pax_forecast_status = 'loaded'
+
+        # Charger Historical si disponible
+        if PAX_HISTORICAL_CACHE.exists():
+            with open(PAX_HISTORICAL_CACHE, 'rb') as f:
+                historical_data = pickle.load(f)
+                st.session_state.pax_historical_data = historical_data
+                st.session_state.pax_historical_min_date = historical_data.index.min().date()
+                st.session_state.pax_historical_max_date = historical_data.index.max().date()
+                st.session_state.pax_historical_status = 'loaded'
+
+        # Restaurer les métadonnées
+        st.session_state.pax_loaded_date = loaded_date
+        st.session_state.pax_loaded_datetime = cache_info.get('loaded_datetime')
+        st.session_state.pax_loading_status = cache_info.get('status', 'success')
+
+        return True
+    except Exception:
+        return False
 
 
 def _read_pax_cache_file() -> dict | None:
@@ -315,6 +380,7 @@ def check_pax_loading_status():
         status = result.get('status')
 
         # Stocker les données Forecast
+        fc_data = None
         if result.get('forecast') and result['forecast'].get('status') == 'loaded':
             fc_data = result['forecast']['data']
             st.session_state.pax_forecast_data = fc_data
@@ -325,6 +391,7 @@ def check_pax_loading_status():
             st.session_state.pax_forecast_status = result.get('forecast', {}).get('status', 'not_loaded')
 
         # Stocker les données Historic
+        hist_data = None
         if result.get('historical') and result['historical'].get('status') == 'loaded':
             hist_data = result['historical']['data']
             st.session_state.pax_historical_data = hist_data
@@ -333,6 +400,10 @@ def check_pax_loading_status():
             st.session_state.pax_historical_status = 'loaded'
         else:
             st.session_state.pax_historical_status = result.get('historical', {}).get('status', 'not_loaded')
+
+        # Sauvegarder les données sur disque pour réutilisation
+        if fc_data is not None or hist_data is not None:
+            _save_pax_data_to_disk(forecast_data=fc_data, historical_data=hist_data)
 
         # Stocker le statut global
         st.session_state.pax_loading_status = status
@@ -360,6 +431,9 @@ def check_pax_loading_status():
 
         # Nettoyer la référence au thread
         del st.session_state.pax_loader_thread
+
+        # Marquer qu'on doit faire un rerun pour afficher les dates
+        st.session_state.pax_needs_rerun = True
 
         return status
 
