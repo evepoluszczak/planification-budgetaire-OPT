@@ -31,6 +31,22 @@ def render_besoin_jour_page():
 
     year = bs['year']
 
+    # Sélection de la catégorie
+    with st.container(border=True):
+        st.subheader("Catégorie de Personnel")
+        available_categories = list(st.session_state.get('perimetres', {}).keys())
+        if not available_categories:
+            st.error("Aucune catégorie de personnel définie dans la Configuration.")
+            st.stop()
+
+        selected_category = st.selectbox(
+            "Sélectionnez la catégorie à ajuster",
+            options=available_categories,
+            index=0 if 'AT' not in available_categories else available_categories.index('AT'),
+            key="besoin_jour_category_select",
+            help="Choisissez la catégorie de personnel pour laquelle vous souhaitez définir des ajustements journaliers."
+        )
+
     def assign_season(d: dt.date) -> str:
         """Assigne la saison pour une date donnée"""
         if 'adjusted_saisons' not in st.session_state or \
@@ -281,7 +297,10 @@ def render_besoin_jour_page():
             st.warning("Veuillez sélectionner une date ou une plage valide.")
 
     # Tabs Besoin
-    tabs_besoin = st.tabs(["Vue & Analyse (Après Règles)", "Gérer les Règles d'Ajustement (AT)"])
+    tabs_besoin = st.tabs([
+        "Vue & Analyse (Après Règles)",
+        f"Gérer les Règles d'Ajustement ({selected_category})"
+    ])
 
     with tabs_besoin[0]:
         if not date_range_final:
@@ -291,7 +310,7 @@ def render_besoin_jour_page():
             )
         else:
             with st.container(border=True):
-                st.subheader("Aperçu de la Grille AT (lecture seule)")
+                st.subheader(f"Aperçu de la Grille {selected_category} (lecture seule)")
                 preview_date = date_range_final[0]
                 if len(date_range_final) > 1:
                     preview_date = st.selectbox(
@@ -304,15 +323,18 @@ def render_besoin_jour_page():
                 preview_saison = assign_season(preview_date)
                 preview_jt = f"{preview_jour} {preview_saison}"
 
-                perimetres_AT = st.session_state.perimetres.get("AT", [])
+                perimetres_cat = st.session_state.perimetres.get(selected_category, [])
                 time_slots_default = TIME_SLOTS
-                planning_dict_at = st.session_state.planning_data.get("AT", {})
+                planning_dict_cat = st.session_state.planning_data.get(selected_category, {})
+
+                # Pour les catégories non-AT, utiliser "Default" comme jour-type
+                jt_key = preview_jt if selected_category == 'AT' else 'Default'
 
                 _, base_df = _ensure_grid(
-                    planning_dict_at, preview_jt, perimetres_AT, time_slots_default
+                    planning_dict_cat, jt_key, perimetres_cat, time_slots_default
                 )
                 eff_df = _apply_ops_to_grid(
-                    base_df, preview_date, preview_jour, preview_saison, category="AT"
+                    base_df, preview_date, preview_jour, preview_saison, category=selected_category
                 )
 
                 view_choice = st.radio(
@@ -332,124 +354,125 @@ def render_besoin_jour_page():
                 )
 
                 day_total_hours = grid_to_show.values.sum() * 0.5
-                tarif_at_day = 0.0
-                personnel_type_at_day = st.session_state.get('cost_mapping', {}).get("AT")
-                if personnel_type_at_day:
+                tarif_cat_day = 0.0
+                personnel_type_cat_day = st.session_state.get('cost_mapping', {}).get(selected_category)
+                if personnel_type_cat_day:
                     personnel_df_day = st.session_state.get('personnel', pd.DataFrame())
                     if not personnel_df_day.empty:
                         row_tarif_day = personnel_df_day[
-                            personnel_df_day['Type'] == personnel_type_at_day
+                            personnel_df_day['Type'] == personnel_type_cat_day
                         ]
                         if not row_tarif_day.empty:
                             try:
-                                tarif_at_day = float(row_tarif_day['Coût Horaire'].iloc[0])
+                                tarif_cat_day = float(row_tarif_day['Coût Horaire'].iloc[0])
                             except (ValueError, TypeError):
-                                tarif_at_day = 0.0
+                                tarif_cat_day = 0.0
 
-                day_total_cost = day_total_hours * tarif_at_day
+                day_total_cost = day_total_hours * tarif_cat_day
                 st.caption(
                     f"**Total pour le {preview_date.strftime('%d.%m.%Y')} ({view_choice}):** "
                     f"{day_total_hours:,.1f} h / {day_total_cost:,.0f} CHF"
                 )
 
-                # Bloc PAX
-                st.divider()
-                st.subheader(f"Prévisions Passagers - {preview_date.strftime('%d.%m.%Y')}")
+                # Bloc PAX (uniquement pour AT)
+                if selected_category == 'AT':
+                    st.divider()
+                    st.subheader(f"Prévisions Passagers - {preview_date.strftime('%d.%m.%Y')}")
 
-                if 'pax_forecast_data' in st.session_state and \
-                   not st.session_state.pax_forecast_data.empty:
-                    pax_agg_full = st.session_state.pax_forecast_data
+                    if 'pax_forecast_data' in st.session_state and \
+                       not st.session_state.pax_forecast_data.empty:
+                        pax_agg_full = st.session_state.pax_forecast_data
 
-                    pax_filter = st.radio(
-                        "Filtrer le flux de passagers :", ('Tous', 'Arrivée', 'Départ'),
-                        horizontal=True, key="pax_flow_filter"
-                    )
-
-                    df_day_raw = pax_agg_full[pax_agg_full.index.date == preview_date].copy()
-
-                    if not df_day_raw.empty:
-                        df_day = pd.DataFrame(index=df_day_raw.index)
-                        if pax_filter == 'Tous':
-                            df_day['Pax Schengen'] = df_day_raw['Pax_Schengen_A'] + \
-                                                     df_day_raw['Pax_Schengen_D']
-                            df_day['Pax Non-Schengen'] = df_day_raw['Pax_NonSchengen_A'] + \
-                                                          df_day_raw['Pax_NonSchengen_D']
-                        elif pax_filter == 'Arrivée':
-                            df_day['Pax Schengen'] = df_day_raw['Pax_Schengen_A']
-                            df_day['Pax Non-Schengen'] = df_day_raw['Pax_NonSchengen_A']
-                        elif pax_filter == 'Départ':
-                            df_day['Pax Schengen'] = df_day_raw['Pax_Schengen_D']
-                            df_day['Pax Non-Schengen'] = df_day_raw['Pax_NonSchengen_D']
-
-                        df_day['Pax Total'] = df_day['Pax Schengen'] + df_day['Pax Non-Schengen']
-
-                        total_pax_jour = df_day['Pax Total'].sum()
-                        total_schengen = df_day['Pax Schengen'].sum()
-                        total_non_schengen = df_day['Pax Non-Schengen'].sum()
-
-                        st.markdown(
-                            f"""<div class="kpi-cards">
-                            <div class="kpi-card kpi-blue">
-                                <div class="label">Total Passagers ({pax_filter})</div>
-                                <div class="value">{total_pax_jour:,.0f}</div>
-                            </div>
-                            <div class="kpi-card kpi-green">
-                                <div class="label">Total Schengen ({pax_filter})</div>
-                                <div class="value">{total_schengen:,.0f}</div>
-                            </div>
-                            <div class="kpi-card kpi-amber">
-                                <div class="label">Total Non-Schengen ({pax_filter})</div>
-                                <div class="value">{total_non_schengen:,.0f}</div>
-                            </div>
-                            </div>""",
-                            unsafe_allow_html=True
+                        pax_filter = st.radio(
+                            "Filtrer le flux de passagers :", ('Tous', 'Arrivée', 'Départ'),
+                            horizontal=True, key="pax_flow_filter"
                         )
-                        st.markdown("---")
 
-                        if total_pax_jour > 0:
-                            df_day['Heure'] = df_day.index.strftime('%H:%M')
-                            df_chart_to_melt = df_day[['Heure', 'Pax Schengen', 'Pax Non-Schengen']]
-                            df_chart_long = df_chart_to_melt.melt(
-                                'Heure', var_name='Zone', value_name='Passagers'
+                        df_day_raw = pax_agg_full[pax_agg_full.index.date == preview_date].copy()
+
+                        if not df_day_raw.empty:
+                            df_day = pd.DataFrame(index=df_day_raw.index)
+                            if pax_filter == 'Tous':
+                                df_day['Pax Schengen'] = df_day_raw['Pax_Schengen_A'] + \
+                                                         df_day_raw['Pax_Schengen_D']
+                                df_day['Pax Non-Schengen'] = df_day_raw['Pax_NonSchengen_A'] + \
+                                                              df_day_raw['Pax_NonSchengen_D']
+                            elif pax_filter == 'Arrivée':
+                                df_day['Pax Schengen'] = df_day_raw['Pax_Schengen_A']
+                                df_day['Pax Non-Schengen'] = df_day_raw['Pax_NonSchengen_A']
+                            elif pax_filter == 'Départ':
+                                df_day['Pax Schengen'] = df_day_raw['Pax_Schengen_D']
+                                df_day['Pax Non-Schengen'] = df_day_raw['Pax_NonSchengen_D']
+
+                            df_day['Pax Total'] = df_day['Pax Schengen'] + df_day['Pax Non-Schengen']
+
+                            total_pax_jour = df_day['Pax Total'].sum()
+                            total_schengen = df_day['Pax Schengen'].sum()
+                            total_non_schengen = df_day['Pax Non-Schengen'].sum()
+
+                            st.markdown(
+                                f"""<div class="kpi-cards">
+                                <div class="kpi-card kpi-blue">
+                                    <div class="label">Total Passagers ({pax_filter})</div>
+                                    <div class="value">{total_pax_jour:,.0f}</div>
+                                </div>
+                                <div class="kpi-card kpi-green">
+                                    <div class="label">Total Schengen ({pax_filter})</div>
+                                    <div class="value">{total_schengen:,.0f}</div>
+                                </div>
+                                <div class="kpi-card kpi-amber">
+                                    <div class="label">Total Non-Schengen ({pax_filter})</div>
+                                    <div class="value">{total_non_schengen:,.0f}</div>
+                                </div>
+                                </div>""",
+                                unsafe_allow_html=True
                             )
+                            st.markdown("---")
 
-                            chart = alt.Chart(df_chart_long).mark_bar().encode(
-                                x=alt.X('Heure:O', sort=None, title='Heure'),
-                                y=alt.Y('Passagers:Q', title=f'Nombre de Passagers ({pax_filter})'),
-                                color=alt.Color('Zone:N', title='Zone'),
-                                xOffset=alt.XOffset('Zone:N', title='Zone'),
-                                tooltip=['Heure', 'Zone', 'Passagers']
-                            ).properties().interactive()
+                            if total_pax_jour > 0:
+                                df_day['Heure'] = df_day.index.strftime('%H:%M')
+                                df_chart_to_melt = df_day[['Heure', 'Pax Schengen', 'Pax Non-Schengen']]
+                                df_chart_long = df_chart_to_melt.melt(
+                                    'Heure', var_name='Zone', value_name='Passagers'
+                                )
 
-                            st.altair_chart(chart, use_container_width=True)
+                                chart = alt.Chart(df_chart_long).mark_bar().encode(
+                                    x=alt.X('Heure:O', sort=None, title='Heure'),
+                                    y=alt.Y('Passagers:Q', title=f'Nombre de Passagers ({pax_filter})'),
+                                    color=alt.Color('Zone:N', title='Zone'),
+                                    xOffset=alt.XOffset('Zone:N', title='Zone'),
+                                    tooltip=['Heure', 'Zone', 'Passagers']
+                                ).properties().interactive()
+
+                                st.altair_chart(chart, use_container_width=True)
+                            else:
+                                st.info(
+                                    f"Aucune prévision passager ({pax_filter}) trouvée pour "
+                                    f"le {preview_date.strftime('%d.%m.%Y')}."
+                                )
                         else:
                             st.info(
-                                f"Aucune prévision passager ({pax_filter}) trouvée pour "
+                                f"Aucune prévision passager trouvée dans le fichier pour "
                                 f"le {preview_date.strftime('%d.%m.%Y')}."
                             )
                     else:
                         st.info(
-                            f"Aucune prévision passager trouvée dans le fichier pour "
-                            f"le {preview_date.strftime('%d.%m.%Y')}."
+                            f"Données prévisionnelles non chargées ou non trouvées dans "
+                            f"'{PAX_DATA_FILE_PATH.name}'."
                         )
-                else:
-                    st.info(
-                        f"Données prévisionnelles non chargées ou non trouvées dans "
-                        f"'{PAX_DATA_FILE_PATH.name}'."
-                    )
 
     # Tab Gestion des Règles
     with tabs_besoin[1]:
         with st.container(border=True):
-            st.subheader("Définir une Nouvelle Règle (AT)")
+            st.subheader(f"Définir une Nouvelle Règle ({selected_category})")
             if not date_range_final:
                 st.warning("Veuillez d'abord sélectionner une plage de dates et des filtres valides.")
-            elif not jt_set:
+            elif selected_category == 'AT' and not jt_set:
                 st.info("La sélection de dates/filtres actuelle n'impacte aucun jour-type AT connu.")
             else:
-                perimetres_AT = st.session_state.perimetres.get("AT", [])
-                if not perimetres_AT:
-                    st.error("Aucun périmètre défini pour AT dans la Configuration.")
+                perimetres_cat = st.session_state.perimetres.get(selected_category, [])
+                if not perimetres_cat:
+                    st.error(f"Aucun périmètre défini pour {selected_category} dans la Configuration.")
                 else:
                     time_slots_default = TIME_SLOTS
 
@@ -461,7 +484,7 @@ def render_besoin_jour_page():
                         c1, c2, c3 = st.columns([0.5, 0.3, 0.2])
                         with c1:
                             rows_sel = st.multiselect(
-                                "Périmètre(s) AT à modifier", options=perimetres_AT,
+                                f"Périmètre(s) {selected_category} à modifier", options=perimetres_cat,
                                 key="rule_rows_sel"
                             )
                         with c2:
@@ -483,7 +506,7 @@ def render_besoin_jour_page():
                                 st.error("La plage de dates filtrée est vide.")
                             else:
                                 new_rule = {
-                                    'category': 'AT',
+                                    'category': selected_category,
                                     'start': min(date_range_final),
                                     'end': max(date_range_final),
                                     'jours': jours_filter.copy(),
@@ -498,7 +521,7 @@ def render_besoin_jour_page():
                                     st.session_state.besoin_jour_ops, RULES_BESOIN_JOUR_PATH
                                 )
                                 st.success(
-                                    f"Règle ajoutée. Elle affectera les jours correspondants "
+                                    f"Règle {selected_category} ajoutée. Elle affectera les jours correspondants "
                                     f"aux filtres dans la plage {min(date_range_final)} - "
                                     f"{max(date_range_final)}."
                                 )
@@ -506,29 +529,29 @@ def render_besoin_jour_page():
 
         # Affichage des règles enregistrées
         with st.container(border=True):
-            st.subheader("Règles Enregistrées (AT)")
+            st.subheader(f"Règles Enregistrées ({selected_category})")
             all_ops_with_indices = list(enumerate(st.session_state.besoin_jour_ops))
-            ops_at_with_indices = [(i, op) for i, op in all_ops_with_indices
-                                  if op.get('category') == 'AT']
+            ops_cat_with_indices = [(i, op) for i, op in all_ops_with_indices
+                                    if op.get('category') == selected_category]
 
-            if not ops_at_with_indices:
-                st.info("Aucune règle d'ajustement définie pour la catégorie AT.")
+            if not ops_cat_with_indices:
+                st.info(f"Aucune règle d'ajustement définie pour la catégorie {selected_category}.")
             else:
-                if st.button("Supprimer Toutes les Règles AT", type="secondary",
-                           key="delete_all_at_rules"):
+                if st.button(f"Supprimer Toutes les Règles {selected_category}", type="secondary",
+                           key=f"delete_all_{selected_category}_rules"):
                     st.session_state.besoin_jour_ops = [
                         op for op in st.session_state.besoin_jour_ops
-                        if op.get('category') != 'AT'
+                        if op.get('category') != selected_category
                     ]
                     save_rules_to_json(
                         st.session_state.besoin_jour_ops, RULES_BESOIN_JOUR_PATH
                     )
-                    st.success("Toutes les règles AT ont été supprimées.")
+                    st.success(f"Toutes les règles {selected_category} ont été supprimées.")
                     st.rerun()
                 st.divider()
 
                 indices_to_delete = []
-                for original_index, op in ops_at_with_indices:
+                for original_index, op in ops_cat_with_indices:
                     col1, col2 = st.columns([0.9, 0.1])
                     with col1:
                         jours_str = ", ".join(op.get('jours', [])) or 'Tous'
@@ -558,11 +581,11 @@ def render_besoin_jour_page():
                     try:
                         for index_to_del in indices_to_delete:
                             if 0 <= index_to_del < len(st.session_state.besoin_jour_ops):
-                                if st.session_state.besoin_jour_ops[index_to_del].get('category') == 'AT':
+                                if st.session_state.besoin_jour_ops[index_to_del].get('category') == selected_category:
                                     st.session_state.besoin_jour_ops.pop(index_to_del)
                                     deleted_count += 1
                                 else:
-                                    st.warning(f"Tentative de suppression d'une règle non-AT. Ignoré.")
+                                    st.warning(f"Tentative de suppression d'une règle d'une autre catégorie. Ignoré.")
                             else:
                                 st.error(f"Erreur: Index {index_to_del} hors limites.")
                         if deleted_count > 0:
@@ -573,18 +596,3 @@ def render_besoin_jour_page():
                             st.rerun()
                     except Exception as e:
                         st.error(f"Erreur inattendue lors de la suppression: {e}")
-
-    # Planification Standard des Autres Catégories
-    st.divider()
-    st.subheader("Planification Standard des Autres Catégories")
-    other_categories = [cat for cat in st.session_state.get('perimetres', {}).keys()
-                       if cat != 'AT']
-    if other_categories:
-        sorted_other_categories = sorted(other_categories)
-        other_tabs = st.tabs(sorted_other_categories)
-        for i, cat_key in enumerate(sorted_other_categories):
-            with other_tabs[i]:
-                with st.container():
-                    _render_grid_for_edit(cat_key, "Default", title_suffix="(Standard)")
-    else:
-        st.info("Aucune autre catégorie de planification définie dans la Configuration.")
