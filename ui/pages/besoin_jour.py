@@ -90,149 +90,149 @@ def render_besoin_jour_page():
             # Recalculer
             with st.spinner("Recalcul du budget annuel avec tous les ajustements..."):
                 try:
-                calendar_dyn = bs['calendar_df'].copy()
-                time_slots_default = TIME_SLOTS
+                    calendar_dyn = bs['calendar_df'].copy()
+                    time_slots_default = TIME_SLOTS
 
-                # Récupérer toutes les catégories définies
-                all_categories = list(st.session_state.get('perimetres', {}).keys())
+                    # Récupérer toutes les catégories définies
+                    all_categories = list(st.session_state.get('perimetres', {}).keys())
 
-                # Dictionnaire pour stocker les tarifs horaires par catégorie
-                tarifs = {}
-                for category in all_categories:
-                    tarif = 0.0
-                    personnel_type = st.session_state.get('cost_mapping', {}).get(category)
-                    if personnel_type:
-                        personnel_df = st.session_state.get('personnel', pd.DataFrame())
-                        if not personnel_df.empty:
-                            row_tarif = personnel_df[personnel_df['Type'] == personnel_type]
-                            if not row_tarif.empty:
-                                try:
-                                    tarif = float(row_tarif['Coût Horaire'].iloc[0])
-                                except Exception:
-                                    pass
-                    tarifs[category] = tarif
+                    # Dictionnaire pour stocker les tarifs horaires par catégorie
+                    tarifs = {}
+                    for category in all_categories:
+                        tarif = 0.0
+                        personnel_type = st.session_state.get('cost_mapping', {}).get(category)
+                        if personnel_type:
+                            personnel_df = st.session_state.get('personnel', pd.DataFrame())
+                            if not personnel_df.empty:
+                                row_tarif = personnel_df[personnel_df['Type'] == personnel_type]
+                                if not row_tarif.empty:
+                                    try:
+                                        tarif = float(row_tarif['Coût Horaire'].iloc[0])
+                                    except Exception:
+                                        pass
+                        tarifs[category] = tarif
 
-                # Recalculer pour chaque catégorie
-                for category in all_categories:
-                    heures_vals_recalc = []
-                    costs_vals_recalc = []
+                    # Recalculer pour chaque catégorie
+                    for category in all_categories:
+                        heures_vals_recalc = []
+                        costs_vals_recalc = []
 
-                    perimetres_cat = st.session_state.perimetres.get(category, [])
-                    planning_dict_cat = st.session_state.planning_data.get(category, {})
-                    tarif_cat = tarifs.get(category, 0.0)
+                        perimetres_cat = st.session_state.perimetres.get(category, [])
+                        planning_dict_cat = st.session_state.planning_data.get(category, {})
+                        tarif_cat = tarifs.get(category, 0.0)
 
-                    for _, r in calendar_dyn.iterrows():
-                        jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
-                        jtg = r['Jour_Type_Global']
+                        for _, r in calendar_dyn.iterrows():
+                            jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
+                            jtg = r['Jour_Type_Global']
 
-                        # Pour catégories non-AT, utiliser "Default" comme jour-type
-                        jt_key = jtg if category == 'AT' else 'Default'
+                            # Pour catégories non-AT, utiliser "Default" comme jour-type
+                            jt_key = jtg if category == 'AT' else 'Default'
 
-                        _, base_df_cat = _ensure_grid(
-                            planning_dict_cat, jt_key, perimetres_cat, time_slots_default
+                            _, base_df_cat = _ensure_grid(
+                                planning_dict_cat, jt_key, perimetres_cat, time_slots_default
+                            )
+                            eff_df_cat = _apply_ops_to_grid(
+                                base_df_cat, date_, jour, saison, category=category
+                            )
+                            day_hours = eff_df_cat.values.sum() * 0.5
+                            heures_vals_recalc.append(day_hours)
+                            costs_vals_recalc.append(day_hours * tarif_cat)
+
+                        calendar_dyn[f"Heures_{category}"] = heures_vals_recalc
+                        calendar_dyn[f"Coût_{category}"] = costs_vals_recalc
+
+                    heure_cols_categories = [c for c in calendar_dyn.columns
+                                            if c.startswith('Heures_') and c != 'Heures_Total_Jour']
+                    cout_cols_categories = [c for c in calendar_dyn.columns
+                                           if c.startswith('Coût_') and c != 'Coût_Total_Jour']
+
+                    calendar_dyn['Heures_Total_Jour'] = calendar_dyn[heure_cols_categories].sum(
+                        axis=1
+                    ) if heure_cols_categories else 0.0
+                    calendar_dyn['Coût_Total_Jour'] = calendar_dyn[cout_cols_categories].sum(
+                        axis=1
+                    ) if cout_cols_categories else 0.0
+
+                    cur_hours_recalc_planif = calendar_dyn['Heures_Total_Jour'].sum()
+                    cur_cost_recalc_planif = calendar_dyn['Coût_Total_Jour'].sum()
+
+                    # Calculer les totaux de base (planification uniquement)
+                    base_totals = bs.get('totals', {})
+                    base_hours_planif = float(base_totals.get('heures_annuel', 0.0))
+                    base_cost_planif = float(base_totals.get('cout_annuel', 0.0))
+
+                    # Calculer les heures/coûts de formation (même logique que Budget Annuel)
+                    total_heures_formation = 0.0
+                    total_cout_formation = 0.0
+                    cout_horaire_at = 45.50
+                    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                        at_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'AT']
+                        if not at_row.empty:
+                            try:
+                                cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
+                            except Exception:
+                                pass
+                    if 'budget_formation_at' in st.session_state:
+                        df_formation = st.session_state.budget_formation_at.copy()
+                        df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                        df_formation['Heures'] = df_formation.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
+                        df_formation['Nbre de shifts'] = pd.to_numeric(df_formation.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                        df_formation['Total (heures)'] = (
+                            df_formation['Effectif (pers.)'] *
+                            df_formation['Heures'] *
+                            df_formation['Nbre de shifts']
                         )
-                        eff_df_cat = _apply_ops_to_grid(
-                            base_df_cat, date_, jour, saison, category=category
+                        total_heures_formation = df_formation['Total (heures)'].sum()
+                        total_cout_formation = total_heures_formation * cout_horaire_at
+
+                    # Calculer les heures/coûts des formateurs (ATF)
+                    total_heures_formateurs = 0.0
+                    total_cout_formateurs = 0.0
+                    cout_horaire_atf = 52.00
+                    if 'personnel' in st.session_state and not st.session_state.personnel.empty:
+                        atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
+                        if not atf_row.empty:
+                            try:
+                                cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
+                            except Exception:
+                                pass
+                    if 'budget_formateurs_at' in st.session_state:
+                        df_formateurs = st.session_state.budget_formateurs_at.copy()
+                        df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                        df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
+                        df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
+                        df_formateurs['Total (heures)'] = (
+                            df_formateurs['Effectif (pers.)'] *
+                            df_formateurs['Heures'] *
+                            df_formateurs['Nbre de shifts']
                         )
-                        day_hours = eff_df_cat.values.sum() * 0.5
-                        heures_vals_recalc.append(day_hours)
-                        costs_vals_recalc.append(day_hours * tarif_cat)
+                        total_heures_formateurs = df_formateurs['Total (heures)'].sum()
+                        total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
 
-                    calendar_dyn[f"Heures_{category}"] = heures_vals_recalc
-                    calendar_dyn[f"Coût_{category}"] = costs_vals_recalc
+                    # Totaux globaux avec formation (référence Budget Annuel)
+                    base_hours = base_hours_planif + total_heures_formation + total_heures_formateurs
+                    base_cost = base_cost_planif + total_cout_formation + total_cout_formateurs
 
-                heure_cols_categories = [c for c in calendar_dyn.columns
-                                        if c.startswith('Heures_') and c != 'Heures_Total_Jour']
-                cout_cols_categories = [c for c in calendar_dyn.columns
-                                       if c.startswith('Coût_') and c != 'Coût_Total_Jour']
+                    # Ajouter formation et formateurs aux valeurs recalculées pour comparaison correcte
+                    cur_hours_recalc = cur_hours_recalc_planif + total_heures_formation + total_heures_formateurs
+                    cur_cost_recalc = cur_cost_recalc_planif + total_cout_formation + total_cout_formateurs
 
-                calendar_dyn['Heures_Total_Jour'] = calendar_dyn[heure_cols_categories].sum(
-                    axis=1
-                ) if heure_cols_categories else 0.0
-                calendar_dyn['Coût_Total_Jour'] = calendar_dyn[cout_cols_categories].sum(
-                    axis=1
-                ) if cout_cols_categories else 0.0
+                    # Sauvegarder dans le cache
+                    st.session_state.besoin_jour_impact_cache = {
+                        'cur_hours_recalc': cur_hours_recalc,
+                        'cur_cost_recalc': cur_cost_recalc,
+                        'base_hours': base_hours,
+                        'base_cost': base_cost
+                    }
+                    st.session_state.besoin_jour_rules_hash = rules_hash
+                    st.session_state.besoin_jour_cache_year = year
 
-                cur_hours_recalc_planif = calendar_dyn['Heures_Total_Jour'].sum()
-                cur_cost_recalc_planif = calendar_dyn['Coût_Total_Jour'].sum()
-
-                # Calculer les totaux de base (planification uniquement)
-                base_totals = bs.get('totals', {})
-                base_hours_planif = float(base_totals.get('heures_annuel', 0.0))
-                base_cost_planif = float(base_totals.get('cout_annuel', 0.0))
-
-                # Calculer les heures/coûts de formation (même logique que Budget Annuel)
-                total_heures_formation = 0.0
-                total_cout_formation = 0.0
-                cout_horaire_at = 45.50
-                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
-                    at_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'AT']
-                    if not at_row.empty:
-                        try:
-                            cout_horaire_at = float(at_row['Coût Horaire'].iloc[0])
-                        except Exception:
-                            pass
-                if 'budget_formation_at' in st.session_state:
-                    df_formation = st.session_state.budget_formation_at.copy()
-                    df_formation['Effectif (pers.)'] = pd.to_numeric(df_formation.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formation['Heures'] = df_formation.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
-                    df_formation['Nbre de shifts'] = pd.to_numeric(df_formation.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formation['Total (heures)'] = (
-                        df_formation['Effectif (pers.)'] *
-                        df_formation['Heures'] *
-                        df_formation['Nbre de shifts']
-                    )
-                    total_heures_formation = df_formation['Total (heures)'].sum()
-                    total_cout_formation = total_heures_formation * cout_horaire_at
-
-                # Calculer les heures/coûts des formateurs (ATF)
-                total_heures_formateurs = 0.0
-                total_cout_formateurs = 0.0
-                cout_horaire_atf = 52.00
-                if 'personnel' in st.session_state and not st.session_state.personnel.empty:
-                    atf_row = st.session_state.personnel[st.session_state.personnel['Type'] == 'ATF']
-                    if not atf_row.empty:
-                        try:
-                            cout_horaire_atf = float(atf_row['Coût Horaire'].iloc[0])
-                        except Exception:
-                            pass
-                if 'budget_formateurs_at' in st.session_state:
-                    df_formateurs = st.session_state.budget_formateurs_at.copy()
-                    df_formateurs['Effectif (pers.)'] = pd.to_numeric(df_formateurs.get('Effectif (pers.)', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formateurs['Heures'] = df_formateurs.get('Heures', 0).apply(lambda x: float(str(x).replace(',', '.')) if pd.notna(x) else 0.0).clip(lower=0)
-                    df_formateurs['Nbre de shifts'] = pd.to_numeric(df_formateurs.get('Nbre de shifts', 0), errors='coerce').fillna(0).astype(int).clip(lower=0)
-                    df_formateurs['Total (heures)'] = (
-                        df_formateurs['Effectif (pers.)'] *
-                        df_formateurs['Heures'] *
-                        df_formateurs['Nbre de shifts']
-                    )
-                    total_heures_formateurs = df_formateurs['Total (heures)'].sum()
-                    total_cout_formateurs = total_heures_formateurs * cout_horaire_atf
-
-                # Totaux globaux avec formation (référence Budget Annuel)
-                base_hours = base_hours_planif + total_heures_formation + total_heures_formateurs
-                base_cost = base_cost_planif + total_cout_formation + total_cout_formateurs
-
-                # Ajouter formation et formateurs aux valeurs recalculées pour comparaison correcte
-                cur_hours_recalc = cur_hours_recalc_planif + total_heures_formation + total_heures_formateurs
-                cur_cost_recalc = cur_cost_recalc_planif + total_cout_formation + total_cout_formateurs
-
-                # Sauvegarder dans le cache
-                st.session_state.besoin_jour_impact_cache = {
-                    'cur_hours_recalc': cur_hours_recalc,
-                    'cur_cost_recalc': cur_cost_recalc,
-                    'base_hours': base_hours,
-                    'base_cost': base_cost
-                }
-                st.session_state.besoin_jour_rules_hash = rules_hash
-                st.session_state.besoin_jour_cache_year = year
-
-            except Exception as e:
-                st.error(f"Erreur lors du recalcul de l'impact annuel: {e}")
-                cur_hours_recalc = 0.0
-                cur_cost_recalc = 0.0
-                base_hours = 0.0
-                base_cost = 0.0
+                except Exception as e:
+                    st.error(f"Erreur lors du recalcul de l'impact annuel: {e}")
+                    cur_hours_recalc = 0.0
+                    cur_cost_recalc = 0.0
+                    base_hours = 0.0
+                    base_cost = 0.0
 
         # Afficher les résultats (que ce soit depuis le cache ou recalculé)
         if cache_valid:
