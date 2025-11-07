@@ -266,6 +266,55 @@ def render_assistant_besoin_jour_page():
         with st.container(border=True):
             st.subheader("📋 Suggestions Générées")
 
+            # Filtre par score minimum
+            st.markdown("**Filtrage par Score de Qualité**")
+            col_slider, col_stats = st.columns([3, 1])
+
+            with col_slider:
+                min_score = st.slider(
+                    "Score minimum requis",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.0,
+                    step=0.05,
+                    key="filter_min_score",
+                    help="Ne conserver que les suggestions avec un score >= à cette valeur. "
+                         "Plus le score est élevé, meilleure est la qualité de la suggestion."
+                )
+
+            with col_stats:
+                # Calculer statistiques globales AVANT filtrage
+                total_all_suggs = sum(len(suggs) for suggs in suggestions_dict.values())
+                total_all_hours = sum(sum(s.delta_hours for s in suggs) for suggs in suggestions_dict.values())
+                total_all_chf = sum(sum(s.delta_chf for s in suggs) for suggs in suggestions_dict.values())
+
+                # Filtrer et calculer statistiques APRÈS filtrage
+                filtered_dict = {
+                    cat: [s for s in suggs if s.score >= min_score]
+                    for cat, suggs in suggestions_dict.items()
+                }
+                total_filtered = sum(len(suggs) for suggs in filtered_dict.values())
+                total_filtered_hours = sum(sum(s.delta_hours for s in suggs) for suggs in filtered_dict.values())
+                total_filtered_chf = sum(sum(s.delta_chf for s in suggs) for suggs in filtered_dict.values())
+
+                st.metric(
+                    "Suggestions filtrées",
+                    f"{total_filtered}/{total_all_suggs}",
+                    delta=f"{(total_filtered/total_all_suggs*100):.0f}%" if total_all_suggs > 0 else "0%"
+                )
+
+            # Afficher statistiques globales filtrées
+            if min_score > 0.0:
+                col_info1, col_info2, col_info3 = st.columns(3)
+                with col_info1:
+                    st.info(f"📊 **Suggestions retenues :** {total_filtered} / {total_all_suggs}")
+                with col_info2:
+                    st.info(f"⏱️ **Total heures :** {total_filtered_hours:+,.1f} h")
+                with col_info3:
+                    st.info(f"💰 **Total CHF :** {total_filtered_chf:+,.0f} CHF")
+
+            st.divider()
+
             # Tabs par catégorie
             categories = list(suggestions_dict.keys())
             if len(categories) == 0:
@@ -275,7 +324,8 @@ def render_assistant_besoin_jour_page():
 
                 for idx, category in enumerate(categories):
                     with tabs[idx]:
-                        suggestions = suggestions_dict[category]
+                        # Appliquer le filtre de score
+                        suggestions = [s for s in suggestions_dict[category] if s.score >= min_score]
 
                         # Afficher diagnostics si disponibles
                         if 'suggestions_diagnostics' in st.session_state and st.session_state.suggestions_diagnostics:
@@ -291,7 +341,15 @@ def render_assistant_besoin_jour_page():
                                         st.success(f"✅ {msg_text}")
 
                         if not suggestions:
-                            st.info(f"Aucune suggestion pour la catégorie {category}.")
+                            # Vérifier si c'est à cause du filtre ou pas
+                            original_count = len(suggestions_dict[category])
+                            if original_count > 0 and min_score > 0:
+                                st.warning(
+                                    f"⚠️ Aucune suggestion pour **{category}** avec score >= {min_score:.2f}. "
+                                    f"({original_count} suggestion(s) disponible(s) avec score plus faible)"
+                                )
+                            else:
+                                st.info(f"Aucune suggestion générée pour la catégorie {category}.")
                             continue
 
                         # Calculer totaux
