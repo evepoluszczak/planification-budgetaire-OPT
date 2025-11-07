@@ -135,6 +135,36 @@ def generate_budget_state(year: int):
         calendar_df['Saison'] = calendar_df['Date'].apply(assign_season)
         calendar_df['Jour_Type_Global'] = calendar_df['Jour'] + " " + calendar_df['Saison']
 
+        # Enrichir avec les événements spéciaux
+        from models.event import EventManager
+        try:
+            def get_event_info(date_):
+                """Récupère les informations d'événement pour une date"""
+                d = date_.date()
+                event = EventManager.get_event(d)
+                if event:
+                    return pd.Series({
+                        'Event_Name': event.name,
+                        'Event_Type': event.event_type,
+                        'Event_Penalty': event.penalty_factor
+                    })
+                else:
+                    return pd.Series({
+                        'Event_Name': None,
+                        'Event_Type': None,
+                        'Event_Penalty': 0.0
+                    })
+
+            event_info = calendar_df['Date'].apply(get_event_info)
+            calendar_df['Event_Name'] = event_info['Event_Name']
+            calendar_df['Event_Type'] = event_info['Event_Type']
+            calendar_df['Event_Penalty'] = event_info['Event_Penalty']
+        except Exception as e:
+            # Si erreur chargement événements, mettre valeurs par défaut
+            calendar_df['Event_Name'] = None
+            calendar_df['Event_Type'] = None
+            calendar_df['Event_Penalty'] = 0.0
+
         from config.constants import TIME_SLOTS
         time_slots_default = TIME_SLOTS
 

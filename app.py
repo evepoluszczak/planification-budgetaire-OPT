@@ -230,6 +230,9 @@ else:
         if st.button("Besoin Jour", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Besoin Jour" else "secondary"):
             change_page("Besoin Jour")
+        if st.button("📅 Événements Spéciaux", use_container_width=True,
+                     type="primary" if st.session_state.selected_page == "Événements Spéciaux" else "secondary"):
+            change_page("Événements Spéciaux")
         if st.button("Analyse Budgétaire", use_container_width=True,
                      type="primary" if st.session_state.selected_page == "Analyse Budgétaire" else "secondary"):
             change_page("Analyse Budgétaire")
@@ -516,6 +519,10 @@ else:
     elif page == "Besoin Jour":
         from ui.pages.besoin_jour import render_besoin_jour_page
         render_besoin_jour_page()
+
+    elif page == "Événements Spéciaux":
+        from ui.pages.evenements import render_evenements_page
+        render_evenements_page()
 
     elif page == "Analyse Budgétaire":
         from ui.pages.analyse_budgetaire import render_analyse_budgetaire_page
