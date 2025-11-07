@@ -193,6 +193,11 @@ def load_and_prepare_grids(
                 if effectif_actuel > 0:
                     ratio_pax_per_agent = pax_total / effectif_actuel
 
+                # Récupérer la pénalité événement depuis calendar_df
+                event_penalty = 0.0
+                if 'Event_Penalty' in cal_row and not pd.isna(cal_row['Event_Penalty']):
+                    event_penalty = float(cal_row['Event_Penalty'])
+
                 rows.append({
                     'date': date_val,
                     'jour': jour,
@@ -206,7 +211,8 @@ def load_and_prepare_grids(
                     'pax_schengen': pax_schengen,
                     'pax_non_schengen': pax_non_schengen,
                     'pax_total': pax_total,
-                    'ratio_pax_per_agent': ratio_pax_per_agent
+                    'ratio_pax_per_agent': ratio_pax_per_agent,
+                    'event_penalty': event_penalty
                 })
 
     # Finaliser progress bar
@@ -239,7 +245,10 @@ def compute_slot_features(df: pd.DataFrame, config: SuggestionConfig) -> pd.Data
         df['pax_intensity_norm'] = 0.5  # Valeur neutre si pas de PAX
 
     # 2. Efficacité ratio PAX/agent
-    # Plus le ratio est faible (surplus d'agents), plus le score est élevé
+    # ratio_pax_per_agent = PAX / Agent (combien de passagers par agent)
+    # - Ratio FAIBLE (peu de PAX par agent) = potentiel sureffectif → score ÉLEVÉ pour retrait
+    # - Ratio ÉLEVÉ (beaucoup de PAX par agent) = agents occupés → score FAIBLE pour retrait
+    # Inversé pour l'ajout : ratio élevé → besoin d'agents → score élevé pour ajout
     max_ratio = df['ratio_pax_per_agent'].max()
     if max_ratio > 0:
         df['ratio_efficiency_norm'] = 1.0 - (df['ratio_pax_per_agent'] / max_ratio)
@@ -283,28 +292,58 @@ def score_slots(
     """
     df = df.copy()
 
+    # === FILTRE STRICT : Bloquer les événements critiques/majeurs ===
+    # Les événements avec pénalité >= 0.7 sont EXCLUS complètement
+    # (critical=1.0, major=0.8 sont bloqués ; minor=0.3 est gardé)
+    EVENT_BLOCK_THRESHOLD = 0.7
+
+    if 'event_penalty' in df.columns:
+        nb_slots_before = len(df)
+        df = df[df['event_penalty'] < EVENT_BLOCK_THRESHOLD].copy()
+        nb_slots_after = len(df)
+
+        if nb_slots_before > nb_slots_after:
+            nb_blocked = nb_slots_before - nb_slots_after
+            # Note: ce message sera visible dans les diagnostics si besoin
+            # st.info(f"🚫 {nb_blocked} slot(s) bloqué(s) par des événements critiques/majeurs")
+
+    if df.empty:
+        # Tous les slots ont été filtrés par des événements critiques
+        return df
+
     # Récupérer les pondérations
     w_pax = config.weights.get('pax_intensity', 0.40)
     w_ratio = config.weights.get('ratio_efficiency', 0.35)
     w_var = config.weights.get('variance_stability', 0.25)
+    w_events = config.weights.get('events_penalty', 0.10)  # Poids pour la pénalité événements
+
+    # Normaliser les pénalités événements (celles qui n'ont pas été bloquées)
+    if 'event_penalty' in df.columns:
+        events_penalty = df['event_penalty'].clip(0, 1)
+    else:
+        events_penalty = 0.0
 
     if objective == 'remove':
         # Pour retrait : privilégier faible PAX, faible ratio, faible variance
+        # et pénaliser les dates avec événements (même mineurs)
         df['score'] = (
             w_pax * df['pax_intensity_norm'] +
             w_ratio * df['ratio_efficiency_norm'] +
-            w_var * df['variance_score']
+            w_var * df['variance_score'] -
+            w_events * events_penalty  # Réduire le score pour les événements
         )
     else:
         # Pour ajout : inverser les priorités (privilégier forte PAX, fort ratio)
+        # et pénaliser les dates avec événements
         df['score'] = (
             w_pax * (1.0 - df['pax_intensity_norm']) +
             w_ratio * (1.0 - df['ratio_efficiency_norm']) +
-            w_var * df['variance_score']
+            w_var * df['variance_score'] -
+            w_events * events_penalty  # Réduire le score pour les événements
         )
 
-    # Appliquer pénalités pour événements spéciaux (si implémenté)
-    # TODO: gérer les événements dans V1.1
+    # Clipper le score entre 0 et 1
+    df['score'] = df['score'].clip(0, 1)
 
     # Filtrer les slots invalides (effectif <= min après retrait)
     if objective == 'remove':
