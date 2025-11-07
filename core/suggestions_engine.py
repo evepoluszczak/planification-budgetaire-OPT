@@ -48,6 +48,7 @@ def load_pax_data_for_dates(start_date: date, end_date: date) -> pd.DataFrame:
 def load_and_prepare_grids(
     config: SuggestionConfig,
     year: int,
+    category: str = 'AT',
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     max_days: int = 30
@@ -58,6 +59,7 @@ def load_and_prepare_grids(
     Args:
         config: Configuration des suggestions
         year: Année concernée
+        category: Catégorie de personnel (AT, PP, PE, Admin, Support)
         start_date: Date de début (optionnel, défaut: aujourd'hui)
         end_date: Date de fin (optionnel, défaut: start_date + max_days)
         max_days: Nombre maximum de jours à analyser (défaut: 30)
@@ -69,8 +71,8 @@ def load_and_prepare_grids(
         - perimetre
         - effectif_base (nombre d'agents planifiés avant règles)
         - effectif_actuel (nombre d'agents après règles Besoin Jour)
-        - pax_schengen, pax_non_schengen, pax_total
-        - ratio_pax_per_agent
+        - pax_schengen, pax_non_schengen, pax_total (seulement pour AT)
+        - ratio_pax_per_agent (seulement pour AT)
     """
     from datetime import datetime, timedelta
 
@@ -115,13 +117,15 @@ def load_and_prepare_grids(
         (calendar_df['Date'] <= end_date)
     ].copy()
 
-    # Charger données PAX
-    pax_df = load_pax_data_for_dates(start_date, end_date)
+    # Charger données PAX (seulement pour AT)
+    pax_df = pd.DataFrame()
+    if category == 'AT':
+        pax_df = load_pax_data_for_dates(start_date, end_date)
 
-    # Préparer les grilles AT
-    perimetres_at = st.session_state.perimetres.get("AT", [])
+    # Préparer les grilles pour la catégorie spécifiée
+    perimetres = st.session_state.perimetres.get(category, [])
     time_slots = TIME_SLOTS
-    planning_dict_at = st.session_state.planning_data.get("AT", {})
+    planning_dict = st.session_state.planning_data.get(category, {})
 
     # Créer un dictionnaire de lookup PAX pour accès rapide
     pax_lookup = {}
@@ -158,13 +162,15 @@ def load_and_prepare_grids(
             continue
 
         # Charger grilles base et effective
-        _, base_grid = _ensure_grid(planning_dict_at, jt, perimetres_at, time_slots)
-        effective_grid = _apply_ops_to_grid(base_grid, date_val, jour, saison, category="AT")
+        # Pour les catégories non-AT, utiliser "Default" comme jour-type
+        jt_key = jt if category == 'AT' else 'Default'
+        _, base_grid = _ensure_grid(planning_dict, jt_key, perimetres, time_slots)
+        effective_grid = _apply_ops_to_grid(base_grid, date_val, jour, saison, category=category)
 
         # Pour chaque time slot
         for slot_idx, slot in enumerate(time_slots):
             # Pour chaque périmètre
-            for perimetre in perimetres_at:
+            for perimetre in perimetres:
                 # Vérifier si périmètre verrouillé
                 if config.is_locked(perimetre=perimetre):
                     continue
@@ -672,111 +678,117 @@ def generate_suggestions(
     """
     results = {}
 
-    # V1: Seulement AT
-    category = 'AT'
+    # Récupérer toutes les catégories définies
+    all_categories = list(st.session_state.get('perimetres', {}).keys())
 
-    # Récupérer delta pour AT
-    delta_hours = ajustement.get_category_delta_hours(category)
-    delta_chf = ajustement.get_category_delta_chf(category)
+    # Boucler sur toutes les catégories qui ont un delta non-nul
+    for category in all_categories:
+        # Récupérer delta pour cette catégorie
+        delta_hours = ajustement.get_category_delta_hours(category)
+        delta_chf = ajustement.get_category_delta_chf(category)
 
-    if delta_hours == 0 and delta_chf == 0:
-        return {category: []}
+        if delta_hours == 0 and delta_chf == 0:
+            # Pas d'ajustement nécessaire pour cette catégorie
+            results[category] = []
+            continue
 
-    # Récupérer tarif horaire
-    personnel_df = st.session_state.get('personnel', pd.DataFrame())
-    hourly_rate = 45.50  # Valeur par défaut
+        # Récupérer tarif horaire
+        personnel_df = st.session_state.get('personnel', pd.DataFrame())
+        hourly_rate = 45.50  # Valeur par défaut
 
-    cost_mapping = st.session_state.get('cost_mapping', {})
-    personnel_type = cost_mapping.get(category)
+        cost_mapping = st.session_state.get('cost_mapping', {})
+        personnel_type = cost_mapping.get(category)
 
-    if personnel_type and not personnel_df.empty:
-        rate_row = personnel_df[personnel_df['Type'] == personnel_type]
-        if not rate_row.empty:
-            try:
-                hourly_rate = float(rate_row['Coût Horaire'].iloc[0])
-            except Exception:
-                pass
+        if personnel_type and not personnel_df.empty:
+            rate_row = personnel_df[personnel_df['Type'] == personnel_type]
+            if not rate_row.empty:
+                try:
+                    hourly_rate = float(rate_row['Coût Horaire'].iloc[0])
+                except Exception:
+                    pass
 
-    # Appliquer les verrous depuis ajustement
-    config_with_locks = SuggestionConfig(
-        min_block_hours=config.min_block_hours,
-        min_agents_per_slot=config.min_agents_per_slot,
-        max_agents_per_slot=config.max_agents_per_slot,
-        penalty_events=config.penalty_events,
-        weights=config.weights.copy(),
-        locked_categories=ajustement.locks.get('categories', []),
-        locked_perimetres=ajustement.locks.get('perimetres', []),
-        locked_dates=ajustement.locks.get('dates', []),
-        respect_strict_delta=config.respect_strict_delta
-    )
+        # Appliquer les verrous depuis ajustement
+        config_with_locks = SuggestionConfig(
+            min_block_hours=config.min_block_hours,
+            min_agents_per_slot=config.min_agents_per_slot,
+            max_agents_per_slot=config.max_agents_per_slot,
+            penalty_events=config.penalty_events,
+            weights=config.weights.copy(),
+            locked_categories=ajustement.locks.get('categories', []),
+            locked_perimetres=ajustement.locks.get('perimetres', []),
+            locked_dates=ajustement.locks.get('dates', []),
+            respect_strict_delta=config.respect_strict_delta
+        )
 
-    # 1. Charger et préparer grilles avec PAX (avec limite de jours)
-    df_consolidated = load_and_prepare_grids(config_with_locks, year, max_days=max_days)
+        # 1. Charger et préparer grilles avec PAX (avec limite de jours)
+        df_consolidated = load_and_prepare_grids(config_with_locks, year, category=category, max_days=max_days)
 
-    # Stocker diagnostics dans session_state
-    if 'suggestions_diagnostics' not in st.session_state:
-        st.session_state.suggestions_diagnostics = []
+        # Stocker diagnostics dans session_state
+        if 'suggestions_diagnostics' not in st.session_state:
+            st.session_state.suggestions_diagnostics = []
 
-    diagnostics = []
+        diagnostics = []
 
-    if df_consolidated.empty:
-        diagnostics.append(("error", "Aucune donnée de planification trouvée pour la période analysée."))
+        if df_consolidated.empty:
+            diagnostics.append(("error", f"Aucune donnée de planification trouvée pour {category} sur la période analysée."))
+            st.session_state.suggestions_diagnostics = diagnostics
+            results[category] = []
+            continue
+
+        # Diagnostic 1
+        nb_days = len(df_consolidated['date'].unique())
+        nb_slots = len(df_consolidated)
+        diagnostics.append(("info", f"[{category}] Données chargées : {nb_slots} slots analysés sur {nb_days} jours"))
+
+        # 2. Calculer features
+        df_with_features = compute_slot_features(df_consolidated, config_with_locks)
+
+        # 3. Scorer les slots
+        objective = 'remove' if delta_hours < 0 else 'add'
+        df_scored = score_slots(df_with_features, config_with_locks, objective=objective)
+
+        # Diagnostic 2
+        eligible_count = df_scored['eligible'].sum() if 'eligible' in df_scored.columns else 0
+        diagnostics.append(("info", f"[{category}] Slots éligibles : {eligible_count} / {len(df_scored)} (objectif: {objective}, delta: {delta_hours:+.1f}h / {delta_chf:+.0f} CHF)"))
+
+        if eligible_count == 0:
+            diagnostics.append(("warning", f"[{category}] Aucun slot éligible trouvé. Vérifiez les contraintes (min_agents={config_with_locks.min_agents_per_slot})."))
+            st.session_state.suggestions_diagnostics = diagnostics
+            results[category] = []
+            continue
+
+        # 4. Allouer via greedy
+        suggestions = allocate_delta_greedy(
+            df_scored,
+            delta_hours,
+            delta_chf,
+            config_with_locks,
+            category=category,
+            hourly_rate=hourly_rate
+        )
+
+        # Diagnostic avant consolidation
+        nb_suggestions_brutes = len(suggestions)
+        if suggestions:
+            total_h_brut = sum(s.delta_hours for s in suggestions)
+            total_c_brut = sum(s.delta_chf for s in suggestions)
+            diagnostics.append(("info", f"[{category}] {nb_suggestions_brutes} suggestion(s) brute(s) générée(s) : {total_h_brut:+.1f}h / {total_c_brut:+.0f} CHF"))
+        else:
+            diagnostics.append(("warning", f"[{category}] L'algorithme greedy n'a généré aucune suggestion. L'objectif ({delta_hours:+.1f}h) est peut-être trop ambitieux pour la période analysée."))
+            st.session_state.suggestions_diagnostics = diagnostics
+            results[category] = suggestions
+            continue
+
+        # 5. Consolider les suggestions (regrouper créneaux consécutifs et périmètres)
+        suggestions_consolidated = consolidate_suggestions(suggestions)
+
+        # Diagnostic final après consolidation
+        total_h = sum(s.delta_hours for s in suggestions_consolidated)
+        total_c = sum(s.delta_chf for s in suggestions_consolidated)
+        diagnostics.append(("success", f"[{category}] {len(suggestions_consolidated)} suggestion(s) consolidée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF (regroupées depuis {nb_suggestions_brutes} suggestions brutes)"))
+
         st.session_state.suggestions_diagnostics = diagnostics
-        return {category: []}
-
-    # Diagnostic 1
-    nb_days = len(df_consolidated['date'].unique())
-    nb_slots = len(df_consolidated)
-    diagnostics.append(("info", f"Données chargées : {nb_slots} slots analysés sur {nb_days} jours"))
-
-    # 2. Calculer features
-    df_with_features = compute_slot_features(df_consolidated, config_with_locks)
-
-    # 3. Scorer les slots
-    objective = 'remove' if delta_hours < 0 else 'add'
-    df_scored = score_slots(df_with_features, config_with_locks, objective=objective)
-
-    # Diagnostic 2
-    eligible_count = df_scored['eligible'].sum() if 'eligible' in df_scored.columns else 0
-    diagnostics.append(("info", f"Slots éligibles : {eligible_count} / {len(df_scored)} (objectif: {objective}, delta: {delta_hours:+.1f}h / {delta_chf:+.0f} CHF)"))
-
-    if eligible_count == 0:
-        diagnostics.append(("warning", f"Aucun slot éligible trouvé. Vérifiez les contraintes (min_agents={config_with_locks.min_agents_per_slot}). Essayez de réduire min_agents à 0."))
-        st.session_state.suggestions_diagnostics = diagnostics
-        return {category: []}
-
-    # 4. Allouer via greedy
-    suggestions = allocate_delta_greedy(
-        df_scored,
-        delta_hours,
-        delta_chf,
-        config_with_locks,
-        category=category,
-        hourly_rate=hourly_rate
-    )
-
-    # Diagnostic avant consolidation
-    nb_suggestions_brutes = len(suggestions)
-    if suggestions:
-        total_h_brut = sum(s.delta_hours for s in suggestions)
-        total_c_brut = sum(s.delta_chf for s in suggestions)
-        diagnostics.append(("info", f"{nb_suggestions_brutes} suggestion(s) brute(s) générée(s) : {total_h_brut:+.1f}h / {total_c_brut:+.0f} CHF"))
-    else:
-        diagnostics.append(("warning", f"L'algorithme greedy n'a généré aucune suggestion. L'objectif ({delta_hours:+.1f}h) est peut-être trop ambitieux pour la période analysée."))
-        st.session_state.suggestions_diagnostics = diagnostics
-        results[category] = suggestions
-        return results
-
-    # 5. Consolider les suggestions (regrouper créneaux consécutifs et périmètres)
-    suggestions_consolidated = consolidate_suggestions(suggestions)
-
-    # Diagnostic final après consolidation
-    total_h = sum(s.delta_hours for s in suggestions_consolidated)
-    total_c = sum(s.delta_chf for s in suggestions_consolidated)
-    diagnostics.append(("success", f"{len(suggestions_consolidated)} suggestion(s) consolidée(s) : {total_h:+.1f}h / {total_c:+.0f} CHF (regroupées depuis {nb_suggestions_brutes} suggestions brutes)"))
-
-    st.session_state.suggestions_diagnostics = diagnostics
-    results[category] = suggestions_consolidated
+        results[category] = suggestions_consolidated
 
     return results
 
