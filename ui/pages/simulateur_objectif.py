@@ -586,31 +586,52 @@ def render_simulateur_objectif_page():
         st.success(f"✅ Scénario chargé avec succès ! Objectif: {imported_data['target_adjustment']:,.0f} CHF")
         st.rerun()
 
+    # ==== Import de scénario (disponible dès le départ) ====
+    st.markdown("---")
+    with st.expander("📁 Charger un scénario depuis un fichier"):
+        st.markdown("Importez un scénario exporté précédemment pour le réutiliser.")
+        uploaded_file = st.file_uploader(
+            "Sélectionner un fichier de scénario (Excel ou CSV)",
+            type=["xlsx", "xls", "csv"],
+            key="scenario_uploader",
+            help="Chargez un scénario exporté précédemment pour le réutiliser"
+        )
+
+        if uploaded_file is not None:
+            if st.button("⬆️ Charger ce scénario", key="load_scenario_btn", type="primary"):
+                imported_data = _import_scenario_from_file(uploaded_file)
+
+                if imported_data:
+                    # Stocker dans une clé temporaire pour traitement au prochain rendu
+                    st.session_state.pending_scenario_import = imported_data
+                    st.rerun()
+
     st.markdown("---")
     with st.container(border=True):
         st.subheader("Simulation d'Objectif de Coût Annuel")
         st.metric("Budget Annuel de Base (avec formation)", f"{base_cost_total:,.0f} CHF")
 
         # ==== Presets d'objectif ====
-        colp1, colp2, colp3, colp4, colp5 = st.columns(5)
+        st.markdown("**Ajustements rapides**")
+        col_spacer1, colp1, colp2, colp3, colp4, colp5, col_spacer2 = st.columns([1, 1, 1, 1, 1, 1.5, 1])
         with colp1:
-            if st.button("−2%"):
+            if st.button("−2%", use_container_width=True):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -2.0
         with colp2:
-            if st.button("−5%"):
+            if st.button("−5%", use_container_width=True):
                 st.session_state.sim_target_adjustment = round(-0.05 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -5.0
         with colp3:
-            if st.button("−10%"):
+            if st.button("−10%", use_container_width=True):
                 st.session_state.sim_target_adjustment = round(-0.10 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -10.0
         with colp4:
-            if st.button("+2%"):
+            if st.button("+2%", use_container_width=True):
                 st.session_state.sim_target_adjustment = round(+0.02 * base_cost_total, 0)
                 st.session_state.sim_target_percent = +2.0
         with colp5:
-            if st.button("Réinitialiser"):
+            if st.button("↺ Reset", use_container_width=True):
                 st.session_state.sim_target_adjustment = 0.0
                 st.session_state.sim_target_percent = 0.0
 
@@ -883,24 +904,6 @@ def render_simulateur_objectif_page():
                 file_name=f"simulateur_objectif_{sc_name}.{ext}",
                 mime=mime
             )
-
-        # ==== Import de scénario ====
-        st.markdown("**Charger un scénario depuis un fichier**")
-        uploaded_file = st.file_uploader(
-            "📁 Sélectionner un fichier de scénario (Excel ou CSV)",
-            type=["xlsx", "xls", "csv"],
-            key="scenario_uploader",
-            help="Chargez un scénario exporté précédemment pour le réutiliser"
-        )
-
-        if uploaded_file is not None:
-            if st.button("⬆️ Charger ce scénario", key="load_scenario_btn"):
-                imported_data = _import_scenario_from_file(uploaded_file)
-
-                if imported_data:
-                    # Stocker dans une clé temporaire pour traitement au prochain rendu
-                    st.session_state.pending_scenario_import = imported_data
-                    st.rerun()
 
         st.divider()
 
