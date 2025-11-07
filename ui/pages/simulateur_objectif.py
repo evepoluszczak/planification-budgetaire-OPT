@@ -741,6 +741,9 @@ def render_simulateur_objectif_page():
         st.success(f"✅ Scénario chargé avec succès ! Objectif: {imported_data['target_adjustment']:,.0f} CHF")
         st.rerun()
 
+    # === SIDEBAR DE CONTEXTE ===
+    _render_context_sidebar(base_cost_total)
+
     # ==== Import de scénario (disponible dès le départ) ====
     st.markdown("---")
     with st.expander("📁 Charger un scénario depuis un fichier"):
@@ -801,24 +804,63 @@ def render_simulateur_objectif_page():
         )
 
         if mode_obj == "Montant (CHF)":
-            target_adjustment = st.number_input(
-                "Objectif d'ajustement (CHF — négatif pour réduire)",
-                value=_safe_to_float(st.session_state.get("sim_target_adjustment", 0.0), 0.0),
-                step=1000.0,
-                format="%.0f",
-                key="sim_target_adjustment",
-                help="Saisir un montant total à répartir entre les catégories (ex: -150000 pour réduire de 150k).",
-            )
+            col_num, col_slider = st.columns([1, 2])
+            with col_num:
+                target_adjustment = st.number_input(
+                    "Objectif d'ajustement (CHF — négatif pour réduire)",
+                    value=_safe_to_float(st.session_state.get("sim_target_adjustment", 0.0), 0.0),
+                    step=1000.0,
+                    format="%.0f",
+                    key="sim_target_adjustment",
+                    help="Saisir un montant total à répartir entre les catégories (ex: -150000 pour réduire de 150k).",
+                )
+            with col_slider:
+                # Slider pour ajustement CHF (limité à ±20% du budget)
+                max_chf = int(base_cost_total * 0.20)
+                slider_chf = st.slider(
+                    "Ajustement visuel (CHF)",
+                    min_value=-max_chf,
+                    max_value=max_chf,
+                    value=int(target_adjustment) if -max_chf <= target_adjustment <= max_chf else 0,
+                    step=1000,
+                    format="%d CHF",
+                    help="Glissez pour ajuster visuellement le budget (±20%)",
+                    label_visibility="collapsed"
+                )
+                # Synchroniser slider vers number_input
+                if slider_chf != int(target_adjustment):
+                    st.session_state.sim_target_adjustment = float(slider_chf)
+                    st.session_state.sim_target_percent = round((slider_chf / base_cost_total) * 100, 1)
+                    st.rerun()
         else:
             # % manuel appliqué à la base (avec formation)
-            target_percent = st.number_input(
-                "Objectif d'ajustement (%) — négatif pour réduire",
-                value=_safe_to_float(st.session_state.get("sim_target_percent", 0.0), 0.0),
-                step=0.5,
-                format="%.1f",
-                key="sim_target_percent",
-                help="Ex: -5.0 pour réduire de 5% le budget annuel (avec formation).",
-            )
+            col_num, col_slider = st.columns([1, 2])
+            with col_num:
+                target_percent = st.number_input(
+                    "Objectif d'ajustement (%) — négatif pour réduire",
+                    value=_safe_to_float(st.session_state.get("sim_target_percent", 0.0), 0.0),
+                    step=0.5,
+                    format="%.1f",
+                    key="sim_target_percent",
+                    help="Ex: -5.0 pour réduire de 5% le budget annuel (avec formation).",
+                )
+            with col_slider:
+                # Slider pour ajustement % (limité à ±20%)
+                slider_pct = st.slider(
+                    "Ajustement visuel (%)",
+                    min_value=-20.0,
+                    max_value=20.0,
+                    value=target_percent if -20.0 <= target_percent <= 20.0 else 0.0,
+                    step=0.5,
+                    format="%.1f%%",
+                    help="Glissez pour ajuster visuellement le pourcentage (±20%)",
+                    label_visibility="collapsed"
+                )
+                # Synchroniser slider vers number_input
+                if slider_pct != target_percent:
+                    st.session_state.sim_target_percent = slider_pct
+                    st.session_state.sim_target_adjustment = round(base_cost_total * (slider_pct / 100.0), 0)
+                    st.rerun()
             target_adjustment = round(base_cost_total * (target_percent / 100.0), 0)
 
         st.divider()
@@ -968,50 +1010,40 @@ def render_simulateur_objectif_page():
             },
         )
 
-        # Deltas globaux
-        new_total = base_cost_total + target_adjustment
-        colg1, colg2, colg3 = st.columns(3)
-        with colg1:
-            st.metric("Objectif (Δ coût)", f"{target_adjustment:,.0f} CHF")
-        with colg2:
-            st.metric("Budget après ajustement", f"{new_total:,.0f} CHF")
-        with colg3:
-            tot_hours = results_df["Ajustement Heures (h)"].fillna(0).sum()
-            st.metric("Variation estimée d'heures", f"{tot_hours:,.0f} h")
+        # === KPI Hero Section ===
+        _render_kpi_hero_section(base_cost_total, target_adjustment, results_df)
 
         # ==== Visualisations ====
-        st.markdown("### Visualisations")
+        st.markdown("### 📊 Analyse Visuelle")
         if not results_df.empty:
-            top = results_df.sort_values("Ajustement Coût (CHF)", ascending=False)
+            # Afficher les graphiques Plotly en 2 colonnes si disponibles
+            if PLOTLY_AVAILABLE:
+                col_viz1, col_viz2 = st.columns(2)
 
-            # Barres (CHF)
-            # Remarque : Altair v5 exige des noms de champs valides et types corrects.
-            bar_chf = alt.Chart(top).mark_bar().encode(
-                x=alt.X("Ajustement Coût (CHF):Q", title="Impact (CHF)"),
-                y=alt.Y("Catégorie:N", sort='-x', title="Catégorie"),
-                tooltip=[
-                    alt.Tooltip("Catégorie:N"),
-                    alt.Tooltip("Part Répartition (%):Q", format=".1f"),
-                    alt.Tooltip("Ajustement Coût (CHF):Q", format=","),
-                    alt.Tooltip("Ajustement Heures (h):Q", format=","),
-                    alt.Tooltip("Tarif Horaire (CHF):Q", format=".2f"),
-                ],
-                color=alt.value("#0076AA") if target_adjustment >= 0 else alt.value("#DC143C")
-            ).properties(height=320)
+                with col_viz1:
+                    fig_sunburst = _create_plotly_sunburst(results_df)
+                    if fig_sunburst:
+                        st.plotly_chart(fig_sunburst, use_container_width=True)
 
-            st.altair_chart(bar_chf, use_container_width=True)
-
-            # Pseudo-waterfall (cumul sur l'ordre trié)
-            wf_df = top.copy()
-            wf_df["Cumul (CHF)"] = wf_df["Ajustement Coût (CHF)"].cumsum()
-
-            wf_line = alt.Chart(wf_df).mark_line(point=True).encode(
-                x=alt.X("Catégorie:N", title="Catégorie"),
-                y=alt.Y("Cumul (CHF):Q", title="Cumul (CHF)"),
-                tooltip=[alt.Tooltip("Catégorie:N"), alt.Tooltip("Cumul (CHF):Q", format=",")]
-            ).properties(height=260)
-
-            st.altair_chart(wf_line, use_container_width=True)
+                with col_viz2:
+                    fig_waterfall = _create_plotly_waterfall(results_df, base_cost_total)
+                    if fig_waterfall:
+                        st.plotly_chart(fig_waterfall, use_container_width=True)
+            else:
+                # Fallback Altair si Plotly non disponible
+                top = results_df.sort_values("Ajustement Coût (CHF)", ascending=False)
+                bar_chf = alt.Chart(top).mark_bar().encode(
+                    x=alt.X("Ajustement Coût (CHF):Q", title="Impact (CHF)"),
+                    y=alt.Y("Catégorie:N", sort='-x', title="Catégorie"),
+                    tooltip=[
+                        alt.Tooltip("Catégorie:N"),
+                        alt.Tooltip("Part Répartition (%):Q", format=".1f"),
+                        alt.Tooltip("Ajustement Coût (CHF):Q", format=","),
+                        alt.Tooltip("Ajustement Heures (h):Q", format=".2f"),
+                    ],
+                    color=alt.value("#0076AA") if target_adjustment >= 0 else alt.value("#DC143C")
+                ).properties(height=320)
+                st.altair_chart(bar_chf, use_container_width=True)
 
         st.divider()
 
