@@ -100,12 +100,24 @@ def render_evenements_page():
             edit_date = st.session_state.get('edit_event_date')
             existing_event = EventManager.get_event(edit_date) if edit_date else None
 
+            # Déterminer la valeur par défaut pour la date
+            # S'assurer qu'elle est dans l'intervalle [year-01-01, year-12-31]
+            if existing_event:
+                default_date = existing_event.date
+            else:
+                today = date.today()
+                if today.year == year:
+                    default_date = today
+                else:
+                    # Si on est dans une année différente, prendre le 1er janvier de l'année du budget
+                    default_date = date(year, 1, 1)
+
             col_form1, col_form2 = st.columns(2)
 
             with col_form1:
                 event_date = st.date_input(
                     "Date de l'événement",
-                    value=existing_event.date if existing_event else date.today(),
+                    value=default_date,
                     min_value=date(year, 1, 1),
                     max_value=date(year, 12, 31),
                     key="event_form_date"
