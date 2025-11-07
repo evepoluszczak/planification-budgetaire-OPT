@@ -159,11 +159,23 @@ def _collect_slots_df(year: int, categories: List[str]) -> pd.DataFrame:
                         # On mettra Stability/History plus tard (0 par défaut)
                         'Stability': 0.0,
                         'HistoryExc': 0.0,
+                        'EventPenalty': 0.0,  # Sera enrichi plus bas
                     })
 
     slots = pd.DataFrame(rows)
     if slots.empty:
         return slots
+
+    # Enrichir avec les pénalités événements depuis le calendrier
+    try:
+        from models.event import EventManager
+        def get_event_penalty(date_):
+            return EventManager.get_penalty_for_date(date_)
+
+        slots['EventPenalty'] = slots['Date'].apply(get_event_penalty)
+    except Exception:
+        # Si erreur, garder les pénalités à 0
+        slots['EventPenalty'] = 0.0
 
     # Stabilité (variance locale) par (categorie/perimetre/jour)
     # Ici approche simple: variance des PAX entre slots du jour
@@ -207,8 +219,8 @@ def _score_slots(slots: pd.DataFrame, direction: str, params: AssistantParams) -
     # Historique excédent/déficit (placeholder ici = 0 neutre)
     hist = slots['HistoryExc'].clip(0,1)
 
-    # Événements (non géré ici : 0 neutre)
-    events_penalty = 0.0
+    # Pénalité événements (depuis EventManager)
+    events_penalty = slots['EventPenalty'].clip(0, 1)
 
     s = (
         params.w_intensity * inten +
