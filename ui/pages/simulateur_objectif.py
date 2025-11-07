@@ -609,7 +609,7 @@ def render_simulateur_objectif_page():
     
         
         # ==== Presets d'objectif ====
-        colp1, colp2, colp3, colp4, colp5 = st.columns([1,1,1,1,1], gap="small")
+        colp1, colp2, colp3, colp4, colp5 = st.columns([1,1,1,1,1,3], gap="small")
         with colp1:
             if st.button("−2%", key="preset_m2"):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
