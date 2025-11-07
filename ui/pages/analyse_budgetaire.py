@@ -268,6 +268,26 @@ def calculate_budget_modifie(year: int):
     if not bs or bs.get('year') != year or 'calendar_df' not in bs:
         return None
 
+    # Calculer un hash des règles pour détecter les changements
+    import hashlib
+    import json
+    rules_hash = hashlib.md5(
+        json.dumps(st.session_state.besoin_jour_ops, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+    # Vérifier si le cache est valide
+    cache_valid = (
+        'analyse_budget_modifie_cache' in st.session_state and
+        st.session_state.get('analyse_budget_rules_hash') == rules_hash and
+        st.session_state.get('analyse_budget_cache_year') == year
+    )
+
+    if cache_valid:
+        # Utiliser le cache
+        result = st.session_state.analyse_budget_modifie_cache.copy()
+        result['from_cache'] = True
+        return result
+
     try:
         cal = bs['calendar_df'].copy()
         slots = TIME_SLOTS
@@ -320,11 +340,24 @@ def calculate_budget_modifie(year: int):
         cal['Heures_Total_Jour'] = cal[h_cols].sum(axis=1) if h_cols else 0.0
         cal['Coût_Total_Jour'] = cal[c_cols].sum(axis=1) if c_cols else 0.0
 
-        return {
+        result = {
             'heures_total': cal['Heures_Total_Jour'].sum(),
             'cout_total': cal['Coût_Total_Jour'].sum(),
-            'calendar_df': cal
+            'calendar_df': cal,
+            'from_cache': False
         }
+
+        # Sauvegarder dans le cache (sans from_cache pour le cache)
+        cache_result = {
+            'heures_total': result['heures_total'],
+            'cout_total': result['cout_total'],
+            'calendar_df': result['calendar_df']
+        }
+        st.session_state.analyse_budget_modifie_cache = cache_result
+        st.session_state.analyse_budget_rules_hash = rules_hash
+        st.session_state.analyse_budget_cache_year = year
+
+        return result
     except Exception as e:
         st.error(f"Erreur lors du calcul du budget modifié: {e}")
         import traceback
@@ -494,6 +527,12 @@ def render_analyse_budgetaire_page():
     if budget_modifie is None:
         st.error("Impossible de calculer le budget modifié.")
         st.stop()
+
+    # Afficher indicateur de cache
+    if budget_modifie.get('from_cache', False):
+        st.caption("✓ Budget modifié depuis le cache (aucune règle Besoin Jour modifiée)")
+    else:
+        st.caption("🔄 Budget modifié recalculé (nouvelles règles Besoin Jour détectées)")
 
     # =================== Données Budget Annuel & Modifié ===================
     totals_annuel = bs.get('totals', {})

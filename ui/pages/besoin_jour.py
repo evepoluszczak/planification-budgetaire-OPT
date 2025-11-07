@@ -66,8 +66,30 @@ def render_besoin_jour_page():
     # Impact Annuel Recalculé
     with st.container(border=True):
         st.subheader("Impact Annuel Recalculé")
-        with st.spinner("Recalcul du budget annuel avec tous les ajustements..."):
-            try:
+
+        # Calculer un hash des règles pour détecter les changements
+        import hashlib
+        import json
+        rules_hash = hashlib.md5(json.dumps(st.session_state.besoin_jour_ops, sort_keys=True, default=str).encode()).hexdigest()
+
+        # Vérifier si le cache est valide
+        cache_valid = (
+            'besoin_jour_impact_cache' in st.session_state and
+            st.session_state.get('besoin_jour_rules_hash') == rules_hash and
+            st.session_state.get('besoin_jour_cache_year') == year
+        )
+
+        if cache_valid:
+            # Utiliser le cache
+            cached_data = st.session_state.besoin_jour_impact_cache
+            cur_hours_recalc = cached_data['cur_hours_recalc']
+            cur_cost_recalc = cached_data['cur_cost_recalc']
+            base_hours = cached_data['base_hours']
+            base_cost = cached_data['base_cost']
+        else:
+            # Recalculer
+            with st.spinner("Recalcul du budget annuel avec tous les ajustements..."):
+                try:
                 calendar_dyn = bs['calendar_df'].copy()
                 time_slots_default = TIME_SLOTS
 
@@ -195,34 +217,55 @@ def render_besoin_jour_page():
                 cur_hours_recalc = cur_hours_recalc_planif + total_heures_formation + total_heures_formateurs
                 cur_cost_recalc = cur_cost_recalc_planif + total_cout_formation + total_cout_formateurs
 
-                def _delta_str(cur, base, unit):
-                    if base == 0:
-                        pct_str = "N/A" if cur == 0 else "+Inf%"
-                        diff = cur
-                    else:
-                        diff = cur - base
-                        pct = (diff / base) * 100.0
-                        pct_str = f"{pct:+.1f}%"
-                    sign = "+" if diff >= 0 else ""
-                    return f"{sign}{diff:,.0f} {unit} ({pct_str})"
+                # Sauvegarder dans le cache
+                st.session_state.besoin_jour_impact_cache = {
+                    'cur_hours_recalc': cur_hours_recalc,
+                    'cur_cost_recalc': cur_cost_recalc,
+                    'base_hours': base_hours,
+                    'base_cost': base_cost
+                }
+                st.session_state.besoin_jour_rules_hash = rules_hash
+                st.session_state.besoin_jour_cache_year = year
 
-                st.markdown(
-                    f"""<div class="kpi-cards">
-                    <div class="kpi-card kpi-blue">
-                        <div class="label">Nouveau Total Heures Annuel</div>
-                        <div class="value">{cur_hours_recalc:,.0f} h</div>
-                        <div class="delta">{_delta_str(cur_hours_recalc, base_hours, "h")} vs Budget</div>
-                    </div>
-                    <div class="kpi-card kpi-amber">
-                        <div class="label">Nouveau Coût Annuel</div>
-                        <div class="value">{cur_cost_recalc:,.0f} CHF</div>
-                        <div class="delta">{_delta_str(cur_cost_recalc, base_cost, "CHF")} vs Budget</div>
-                    </div>
-                    </div>""",
-                    unsafe_allow_html=True
-                )
             except Exception as e:
                 st.error(f"Erreur lors du recalcul de l'impact annuel: {e}")
+                cur_hours_recalc = 0.0
+                cur_cost_recalc = 0.0
+                base_hours = 0.0
+                base_cost = 0.0
+
+        # Afficher les résultats (que ce soit depuis le cache ou recalculé)
+        if cache_valid:
+            st.caption("✓ Résultats depuis le cache (aucune règle modifiée)")
+        else:
+            st.caption("🔄 Recalcul effectué (nouvelles règles détectées)")
+
+        def _delta_str(cur, base, unit):
+            if base == 0:
+                pct_str = "N/A" if cur == 0 else "+Inf%"
+                diff = cur
+            else:
+                diff = cur - base
+                pct = (diff / base) * 100.0
+                pct_str = f"{pct:+.1f}%"
+            sign = "+" if diff >= 0 else ""
+            return f"{sign}{diff:,.0f} {unit} ({pct_str})"
+
+        st.markdown(
+            f"""<div class="kpi-cards">
+            <div class="kpi-card kpi-blue">
+                <div class="label">Nouveau Total Heures Annuel</div>
+                <div class="value">{cur_hours_recalc:,.0f} h</div>
+                <div class="delta">{_delta_str(cur_hours_recalc, base_hours, "h")} vs Budget</div>
+            </div>
+            <div class="kpi-card kpi-amber">
+                <div class="label">Nouveau Coût Annuel</div>
+                <div class="value">{cur_cost_recalc:,.0f} CHF</div>
+                <div class="delta">{_delta_str(cur_cost_recalc, base_cost, "CHF")} vs Budget</div>
+            </div>
+            </div>""",
+            unsafe_allow_html=True
+        )
 
     # Périmètre de l'Ajustement
     with st.container(border=True):
