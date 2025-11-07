@@ -592,7 +592,7 @@ def render_simulateur_objectif_page():
         st.metric("Budget Annuel de Base (avec formation)", f"{base_cost_total:,.0f} CHF")
 
         # ==== Presets d'objectif ====
-        colp1, colp2, colp3, colp4, colp5, colp6, colp7, colp8 = st.columns(5)
+        colp1, colp2, colp3, colp4, colp5 = st.columns(5)
         with colp1:
             if st.button("−2%"):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
@@ -613,12 +613,7 @@ def render_simulateur_objectif_page():
             if st.button("Réinitialiser"):
                 st.session_state.sim_target_adjustment = 0.0
                 st.session_state.sim_target_percent = 0.0
-        with colp6: 
-            ""
-        with colp7: 
-             ""
-        with colp8: 
-            ""
+
             
 
         # ==== Mode d'objectif : CHF ou % ====
