@@ -18,6 +18,14 @@ def render_evenements_page():
         "Ces événements influencent les suggestions de l'Assistant Besoin Jour."
     )
 
+    # Avertissement important
+    st.info(
+        "💡 **Important :** Après avoir ajouté/modifié des événements, "
+        "vous devez **régénérer le budget** (page 'Budget Annuel' → bouton '🔄 Générer Budget') "
+        "pour que les événements soient pris en compte par l'Assistant Besoin Jour.",
+        icon="⚠️"
+    )
+
     # Vérifier qu'un budget est généré
     bs = st.session_state.get('budget_state', {})
     if not bs or 'year' not in bs:
@@ -376,13 +384,23 @@ def render_evenements_page():
 
         ### Comment l'assistant utilise ces informations
 
-        La pénalité événement représente **10% du score final** de chaque slot.
-        - **Score sans événement:** 0.75 → **Excellent candidat**
-        - **Score avec événement majeur:** 0.75 - (0.10 × 0.8) = **0.67** → Candidat moyen
-        - **Score avec événement critique:** 0.75 - (0.10 × 1.0) = **0.65** → Évité
+        #### 🚫 **Filtre de blocage (pénalité >= 0.7)**
+        Les événements **Critiques (1.0)** et **Majeurs (0.8)** sont **complètement bloqués**.
+        - Les slots de ces journées sont **exclus AVANT le scoring**
+        - Aucune suggestion ne sera générée pour ces dates
+        - ✅ Protection absolue garantie
 
-        Cela permet de **protéger automatiquement** les journées importantes tout en gardant
-        une certaine flexibilité pour les événements mineurs.
+        #### 📊 **Pénalité dans le score (pénalité < 0.7)**
+        Les événements **Mineurs (0.3)** réduisent le score mais ne bloquent pas :
+        - La pénalité compte pour **10% du score final**
+        - **Exemple :** Score 0.75 → avec mineur 0.3 → 0.75 - (0.10 × 0.3) = **0.72**
+        - L'assistant fait preuve de **prudence** mais garde la flexibilité
+
+        #### 💡 **En résumé**
+        - **Critique/Majeur :** Blocage total (aucune suggestion générée)
+        - **Mineur :** Réduction du score (suggestions possibles mais moins prioritaires)
+
+        ⚠️ **N'oubliez pas** de régénérer le budget après avoir modifié les événements !
         """)
 
 
