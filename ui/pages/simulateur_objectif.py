@@ -590,26 +590,44 @@ def render_simulateur_objectif_page():
         st.subheader("Simulation d'Objectif de Coût Annuel")
         st.metric("Budget Annuel de Base (avec formation)", f"{base_cost_total:,.0f} CHF")
 
+        st.markdown("""
+        <style>
+        /* Réduit l’écart entre colonnes */
+        div[data-testid="stHorizontalBlock"] { gap: .25rem !important; }
+        
+        /* Boutons plus compacts */
+        .stButton > button {
+          padding: .25rem .5rem !important;
+          line-height: 1.1 !important;
+          min-height: 2rem !important;
+          margin: 0 !important;
+          border-radius: .5rem !important;
+          white-space: nowrap !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+    
+        
         # ==== Presets d'objectif ====
-        colp1, colp2, colp3, colp4, colp5 = st.columns(7)
+        colp1, colp2, colp3, colp4, colp5 = st.columns([1,1,1,1,1], gap="small")
         with colp1:
-            if st.button("−2%"):
+            if st.button("−2%", key="preset_m2"):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -2.0
         with colp2:
-            if st.button("−5%"):
+            if st.button("−5%", key="preset_m5"):
                 st.session_state.sim_target_adjustment = round(-0.05 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -5.0
         with colp3:
-            if st.button("−10%"):
+            if st.button("−10%", key="preset_m10"):
                 st.session_state.sim_target_adjustment = round(-0.10 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -10.0
         with colp4:
-            if st.button("+2%"):
+            if st.button("+2%", key="preset_p2"):
                 st.session_state.sim_target_adjustment = round(+0.02 * base_cost_total, 0)
                 st.session_state.sim_target_percent = +2.0
         with colp5:
-            if st.button("Réinitialiser"):
+            if st.button("Réinitialiser", key="preset_reset"):
                 st.session_state.sim_target_adjustment = 0.0
                 st.session_state.sim_target_percent = 0.0
 
