@@ -1,14 +1,14 @@
 # ui/pages/simulateur_objectif.py
 """
-Page Simulateur Objectif - Simulation d'objectifs de coût (améliorée)
-- Montant (CHF) OU Pourcentage (%)
-- Presets d'objectif (+/- 2/5/10 %)
-- Auto-répartition (équitable, pro-rata planifié, pro-rata coût horaire)
-- Verrouillage de catégories, cap par catégorie, arrondi configurable
-- Visualisations (barres triées + pseudo-waterfall)
-- Scénarios (enregistrer, comparer, exporter)
-- Export XLSX avec fallback (openpyxl), sinon CSV
-- Sauvegarde automatique des résultats dans st.session_state
+Page Simulateur Objectif - Version Moderne & Professionnelle
+UI/UX optimisée avec :
+- Structure en tabs pour workflow progressif
+- KPI cards hero section
+- Visualisations interactives Plotly
+- Sidebar de contexte permanent
+- Mode Expert/Simplifié
+- Slider interactif pour ajustements rapides
+- Call-to-actions clairs
 """
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ import altair as alt
 from datetime import datetime
 
 from models.suggestion import AjustementPropose
+
+# Importer Plotly pour visualisations modernes
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 
 
 # =========================
@@ -526,17 +534,144 @@ def _save_simulator_results_to_session(results_df: pd.DataFrame,
 
 
 # =========================
+# Fonctions UI Modernes
+# =========================
+
+def _render_kpi_hero_section(base_cost_total: float, target_adjustment: float,
+                              results_df: pd.DataFrame) -> None:
+    """Affiche les KPI cards en hero section."""
+    new_total = base_cost_total + target_adjustment
+    tot_hours = results_df["Ajustement Heures (h)"].fillna(0).sum() if not results_df.empty else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "💰 Budget Actuel",
+            f"{base_cost_total:,.0f} CHF",
+            delta=None,
+            help="Budget annuel de base (avec formation)"
+        )
+
+    with col2:
+        delta_pct = f"{(target_adjustment/base_cost_total*100):+.1f}%" if base_cost_total > 0 else "N/A"
+        st.metric(
+            "🎯 Objectif",
+            f"{target_adjustment:+,.0f} CHF",
+            delta=delta_pct,
+            help="Ajustement ciblé"
+        )
+
+    with col3:
+        st.metric(
+            "📊 Budget Projeté",
+            f"{new_total:,.0f} CHF",
+            delta=None,
+            help="Budget après ajustement"
+        )
+
+    with col4:
+        st.metric(
+            "⏱️ Impact Heures",
+            f"{tot_hours:+,.0f} h",
+            delta=None,
+            help="Variation estimée d'heures"
+        )
+
+
+def _render_context_sidebar(base_cost_total: float) -> None:
+    """Affiche la sidebar de contexte."""
+    with st.sidebar:
+        st.markdown("### 📌 Contexte")
+
+        # Budget info card
+        with st.container(border=True):
+            st.caption("Budget de Base")
+            st.markdown(f"**{base_cost_total:,.0f} CHF**")
+            st.caption("Inclut formation AT/ATF")
+
+        # Scénarios sauvegardés
+        scenarios = st.session_state.get("sim_scenarios", {})
+        with st.container(border=True):
+            st.caption("Scénarios Enregistrés")
+            st.metric("Total", len(scenarios))
+            if scenarios:
+                st.caption("**Derniers scénarios:**")
+                for name in list(scenarios.keys())[-3:]:
+                    st.caption(f"• {name}")
+
+        # Mode expert toggle
+        expert_mode = st.toggle("🔧 Mode Expert", value=st.session_state.get('expert_mode', False))
+        st.session_state.expert_mode = expert_mode
+
+        # Aide rapide
+        with st.expander("💡 Aide Rapide"):
+            st.markdown("""
+            **Comment utiliser:**
+            1. Définir un objectif (CHF ou %)
+            2. Répartir entre catégories
+            3. Analyser les résultats
+            4. Sauvegarder le scénario
+            """)
+
+
+def _create_plotly_sunburst(results_df: pd.DataFrame) -> go.Figure:
+    """Crée un graphique sunburst pour la répartition."""
+    if PLOTLY_AVAILABLE and not results_df.empty:
+        # Préparer les données
+        df = results_df.copy()
+        df['Ajustement_Abs'] = df['Ajustement Coût (CHF)'].abs()
+
+        fig = px.sunburst(
+            df,
+            path=['Catégorie'],
+            values='Ajustement_Abs',
+            color='Ajustement Coût (CHF)',
+            color_continuous_scale='RdYlGn',
+            color_continuous_midpoint=0,
+            title="Répartition par Catégorie"
+        )
+        fig.update_layout(height=400)
+        return fig
+    return None
+
+
+def _create_plotly_waterfall(results_df: pd.DataFrame, base_cost_total: float) -> go.Figure:
+    """Crée un graphique waterfall pour l'impact."""
+    if PLOTLY_AVAILABLE and not results_df.empty:
+        # Trier par impact
+        df = results_df.sort_values('Ajustement Coût (CHF)', ascending=False)
+
+        # Préparer les données
+        categories = ['Base'] + df['Catégorie'].tolist() + ['Total']
+        values = [base_cost_total] + df['Ajustement Coût (CHF)'].tolist() + [0]
+
+        fig = go.Figure(go.Waterfall(
+            name="Impact",
+            orientation="v",
+            measure=["absolute"] + ["relative"] * len(df) + ["total"],
+            x=categories,
+            y=values,
+            textposition="outside",
+            text=[f"{v:+,.0f}" if v != 0 else "" for v in values],
+            connector={"line": {"color": "rgb(63, 63, 63)"}}
+        ))
+
+        fig.update_layout(
+            title="Cascade d'Impact",
+            showlegend=False,
+            height=400
+        )
+        return fig
+    return None
+
+
+# =========================
 # Page principale
 # =========================
 
 def render_simulateur_objectif_page():
-    """Affiche la page Simulateur Objectif (version améliorée)."""
-
-    st.title("Simulateur d'Objectif de Coût")
-    st.markdown(
-        "Simulez l'impact en heures d'un **ajustement de coût global** (augmentation/réduction) "
-        "en le répartissant sur les catégories. *Ce simulateur n'applique pas les règles Besoin Jour.*"
-    )
+    """Affiche la page Simulateur Objectif - Version Moderne & Professionnelle."""
 
     # Pré-requis : Budget généré
     bs = st.session_state.get("budget_state", {}) or {}
@@ -547,6 +682,26 @@ def render_simulateur_objectif_page():
 
     # Base de référence (cohérente avec Analyse / Budget Annuel)
     base_cost_total = _base_cost_total_with_training()
+
+    # === HEADER ===
+    col_title, col_import = st.columns([3, 1])
+    with col_title:
+        st.title("🎯 Simulateur d'Objectif")
+        st.caption("Simulez l'impact financier d'un ajustement budgétaire et analysez sa répartition")
+    with col_import:
+        with st.popover("📁 Importer"):
+            uploaded_file = st.file_uploader(
+                "Scénario (.xlsx, .csv)",
+                type=["xlsx", "xls", "csv"],
+                key="scenario_uploader_quick",
+                label_visibility="collapsed"
+            )
+            if uploaded_file:
+                if st.button("⬆️ Charger", type="primary", use_container_width=True):
+                    imported_data = _import_scenario_from_file(uploaded_file)
+                    if imported_data:
+                        st.session_state.pending_scenario_import = imported_data
+                        st.rerun()
 
     # Gérer l'import de scénario (avant la création des widgets)
     if 'pending_scenario_import' in st.session_state:
