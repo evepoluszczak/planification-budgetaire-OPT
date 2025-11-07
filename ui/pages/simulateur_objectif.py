@@ -21,7 +21,6 @@ from datetime import datetime
 
 from models.suggestion import AjustementPropose
 
-
 # =========================
 # Helpers données & calculs
 # =========================
@@ -592,7 +591,7 @@ def render_simulateur_objectif_page():
         st.metric("Budget Annuel de Base (avec formation)", f"{base_cost_total:,.0f} CHF")
 
         # ==== Presets d'objectif ====
-        colp1, colp2, colp3, colp4, colp5 = st.columns([1,1,1,1,1,3], gap='small')
+        colp1, colp2, colp3, colp4, colp5 = st.columns(7)
         with colp1:
             if st.button("−2%"):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
