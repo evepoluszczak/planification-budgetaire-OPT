@@ -69,36 +69,55 @@ def render_besoin_jour_page():
         with st.spinner("Recalcul du budget annuel avec tous les ajustements..."):
             try:
                 calendar_dyn = bs['calendar_df'].copy()
-                heures_vals_at_recalc = []
-                costs_vals_at_recalc = []
-                tarif_at = 0.0
-                personnel_type_at = st.session_state.get('cost_mapping', {}).get("AT")
-                if personnel_type_at:
-                    personnel_df = st.session_state.get('personnel', pd.DataFrame())
-                    if not personnel_df.empty:
-                        row_tarif = personnel_df[personnel_df['Type'] == personnel_type_at]
-                        if not row_tarif.empty:
-                            tarif_at = float(row_tarif['Coût Horaire'].iloc[0])
-
-                perimetres_AT = st.session_state.perimetres.get("AT", [])
                 time_slots_default = TIME_SLOTS
-                planning_dict_at = st.session_state.planning_data.get("AT", {})
 
-                for _, r in calendar_dyn.iterrows():
-                    jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
-                    jtg = r['Jour_Type_Global']
-                    _, base_df_at = _ensure_grid(
-                        planning_dict_at, jtg, perimetres_AT, time_slots_default
-                    )
-                    eff_df_at = _apply_ops_to_grid(
-                        base_df_at, date_, jour, saison, category="AT"
-                    )
-                    day_hours = eff_df_at.values.sum() * 0.5
-                    heures_vals_at_recalc.append(day_hours)
-                    costs_vals_at_recalc.append(day_hours * tarif_at)
+                # Récupérer toutes les catégories définies
+                all_categories = list(st.session_state.get('perimetres', {}).keys())
 
-                calendar_dyn["Heures_AT"] = heures_vals_at_recalc
-                calendar_dyn["Coût_AT"] = costs_vals_at_recalc
+                # Dictionnaire pour stocker les tarifs horaires par catégorie
+                tarifs = {}
+                for category in all_categories:
+                    tarif = 0.0
+                    personnel_type = st.session_state.get('cost_mapping', {}).get(category)
+                    if personnel_type:
+                        personnel_df = st.session_state.get('personnel', pd.DataFrame())
+                        if not personnel_df.empty:
+                            row_tarif = personnel_df[personnel_df['Type'] == personnel_type]
+                            if not row_tarif.empty:
+                                try:
+                                    tarif = float(row_tarif['Coût Horaire'].iloc[0])
+                                except Exception:
+                                    pass
+                    tarifs[category] = tarif
+
+                # Recalculer pour chaque catégorie
+                for category in all_categories:
+                    heures_vals_recalc = []
+                    costs_vals_recalc = []
+
+                    perimetres_cat = st.session_state.perimetres.get(category, [])
+                    planning_dict_cat = st.session_state.planning_data.get(category, {})
+                    tarif_cat = tarifs.get(category, 0.0)
+
+                    for _, r in calendar_dyn.iterrows():
+                        jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
+                        jtg = r['Jour_Type_Global']
+
+                        # Pour catégories non-AT, utiliser "Default" comme jour-type
+                        jt_key = jtg if category == 'AT' else 'Default'
+
+                        _, base_df_cat = _ensure_grid(
+                            planning_dict_cat, jt_key, perimetres_cat, time_slots_default
+                        )
+                        eff_df_cat = _apply_ops_to_grid(
+                            base_df_cat, date_, jour, saison, category=category
+                        )
+                        day_hours = eff_df_cat.values.sum() * 0.5
+                        heures_vals_recalc.append(day_hours)
+                        costs_vals_recalc.append(day_hours * tarif_cat)
+
+                    calendar_dyn[f"Heures_{category}"] = heures_vals_recalc
+                    calendar_dyn[f"Coût_{category}"] = costs_vals_recalc
 
                 heure_cols_categories = [c for c in calendar_dyn.columns
                                         if c.startswith('Heures_') and c != 'Heures_Total_Jour']

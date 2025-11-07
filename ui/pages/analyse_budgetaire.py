@@ -270,31 +270,50 @@ def calculate_budget_modifie(year: int):
 
     try:
         cal = bs['calendar_df'].copy()
-        tarif_at = 0.0
-        t_at = st.session_state.get('cost_mapping', {}).get("AT")
-        if t_at:
-            pers = st.session_state.get('personnel', pd.DataFrame())
-            if not pers.empty:
-                r = pers[pers['Type'] == t_at]
-                if not r.empty:
-                    tarif_at = float(r['Coût Horaire'].iloc[0])
-
-        perims = st.session_state.perimetres.get("AT", [])
         slots = TIME_SLOTS
-        plan_at = st.session_state.planning_data.get("AT", {})
-        h_vals, c_vals = [], []
 
-        for _, r in cal.iterrows():
-            jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
-            jtg = r['Jour_Type_Global']
-            _, base_at = _ensure_grid(plan_at, jtg, perims, slots)
-            eff_at = _apply_ops_to_grid(base_at, date_, jour, saison, category="AT")
-            day_h = eff_at.values.sum() * 0.5
-            h_vals.append(day_h)
-            c_vals.append(day_h * tarif_at)
+        # Récupérer toutes les catégories définies
+        all_categories = list(st.session_state.get('perimetres', {}).keys())
 
-        cal["Heures_AT"] = h_vals
-        cal["Coût_AT"] = c_vals
+        # Dictionnaire pour stocker les tarifs horaires par catégorie
+        tarifs = {}
+        for category in all_categories:
+            tarif = 0.0
+            personnel_type = st.session_state.get('cost_mapping', {}).get(category)
+            if personnel_type:
+                pers = st.session_state.get('personnel', pd.DataFrame())
+                if not pers.empty:
+                    r = pers[pers['Type'] == personnel_type]
+                    if not r.empty:
+                        try:
+                            tarif = float(r['Coût Horaire'].iloc[0])
+                        except Exception:
+                            pass
+            tarifs[category] = tarif
+
+        # Recalculer pour chaque catégorie
+        for category in all_categories:
+            h_vals, c_vals = [], []
+
+            perims = st.session_state.perimetres.get(category, [])
+            plan_cat = st.session_state.planning_data.get(category, {})
+            tarif_cat = tarifs.get(category, 0.0)
+
+            for _, r in cal.iterrows():
+                jour, saison, date_ = r['Jour'], r['Saison'], r['Date'].date()
+                jtg = r['Jour_Type_Global']
+
+                # Pour catégories non-AT, utiliser "Default" comme jour-type
+                jt_key = jtg if category == 'AT' else 'Default'
+
+                _, base_cat = _ensure_grid(plan_cat, jt_key, perims, slots)
+                eff_cat = _apply_ops_to_grid(base_cat, date_, jour, saison, category=category)
+                day_h = eff_cat.values.sum() * 0.5
+                h_vals.append(day_h)
+                c_vals.append(day_h * tarif_cat)
+
+            cal[f"Heures_{category}"] = h_vals
+            cal[f"Coût_{category}"] = c_vals
 
         h_cols = [c for c in cal.columns if c.startswith('Heures_') and c != 'Heures_Total_Jour']
         c_cols = [c for c in cal.columns if c.startswith('Coût_') and c != 'Coût_Total_Jour']
