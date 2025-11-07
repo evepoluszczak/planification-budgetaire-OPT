@@ -28,9 +28,12 @@ class AssistantParams:
     w_events: float = 0.10      # pénalité évènement
 
     # contraintes opérationnelles
-    min_block_hours: float = 1.0   # taille mini d’une suggestion regroupée
-    unit: float = 0.5              # granularité d’allocation (0.5h)
+    min_block_hours: float = 1.0   # taille mini d'une suggestion regroupée
+    unit: float = 0.5              # granularité d'allocation (0.5h)
     honor_min_agents: bool = True  # ne pas franchir le plancher "agents actuels"
+
+    # seuil de blocage événements
+    event_block_threshold: float = 0.7  # événements avec pénalité >= seuil sont bloqués
 
 @dataclass
 class Locks:
@@ -267,6 +270,15 @@ def generate_suggestions(
     if locks.dates:
         lock_dates = set(locks.dates)
         slots = slots[~slots['Date'].isin(lock_dates)]
+
+    # Filtrer les événements critiques et majeurs
+    # Les événements avec pénalité >= threshold sont exclus complètement
+    # Par défaut 0.7 (bloque 'critical'=1.0 et 'major'=0.8, garde 'minor'=0.3)
+    slots = slots[slots['EventPenalty'] < params.event_block_threshold].copy()
+
+    if slots.empty:
+        # Tous les slots ont été filtrés par des événements critiques
+        return []
 
     # Build index -> quick lookup
     suggestions: List[Suggestion] = []
