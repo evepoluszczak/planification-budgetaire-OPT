@@ -678,11 +678,20 @@ def generate_suggestions(
     """
     results = {}
 
-    # Récupérer toutes les catégories définies
-    all_categories = list(st.session_state.get('perimetres', {}).keys())
+    # Récupérer les catégories depuis la distribution de l'ajustement
+    # (uniquement les catégories sélectionnées par l'utilisateur dans le simulateur)
+    if not ajustement.distribution:
+        # Pas de distribution définie, retourner vide
+        return results
 
-    # Boucler sur toutes les catégories qui ont un delta non-nul
-    for category in all_categories:
+    # Boucler sur les catégories qui ont un ajustement dans la distribution
+    for category in ajustement.distribution.keys():
+        # Vérifier que la catégorie existe dans la configuration
+        if category not in st.session_state.get('perimetres', {}):
+            st.warning(f"⚠️ Catégorie '{category}' dans l'ajustement mais non définie dans la configuration. Ignorée.")
+            results[category] = []
+            continue
+
         # Récupérer delta pour cette catégorie
         delta_hours = ajustement.get_category_delta_hours(category)
         delta_chf = ajustement.get_category_delta_chf(category)
