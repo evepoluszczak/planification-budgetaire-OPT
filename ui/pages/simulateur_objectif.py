@@ -613,6 +613,13 @@ def render_simulateur_objectif_page():
             if st.button("Réinitialiser"):
                 st.session_state.sim_target_adjustment = 0.0
                 st.session_state.sim_target_percent = 0.0
+        with colp6: 
+            ""
+        with colp7: 
+             ""
+        with colp8: 
+            ""
+            
 
         # ==== Mode d'objectif : CHF ou % ====
         mode_obj = st.radio(
