@@ -6,9 +6,9 @@ Page Simulateur Objectif - Simulation d'objectifs de coût (améliorée)
 - Auto-répartition (équitable, pro-rata planifié, pro-rata coût horaire)
 - Verrouillage de catégories, cap par catégorie, arrondi configurable
 - Visualisations (barres triées + pseudo-waterfall)
-- Scénarios (enregistrer, comparer, exporter, importer dès le départ)
+- Scénarios (enregistrer, comparer, exporter)
 - Export XLSX avec fallback (openpyxl), sinon CSV
-- Sauvegarde automatique des résultats dans st.session_state (+ passerelle vers Assistant Besoin Jour)
+- Sauvegarde automatique des résultats dans st.session_state
 """
 from __future__ import annotations
 
@@ -17,19 +17,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import altair as alt
+from datetime import datetime
 
-# --- AjustementPropose (fallback si module absent) ---
-try:
-    from models.suggestion import AjustementPropose
-except Exception:
-    from dataclasses import dataclass, field
-    @dataclass
-    class AjustementPropose:
-        total_delta_hours: float
-        total_delta_chf: float
-        distribution: dict = field(default_factory=dict)
-        locks: dict = field(default_factory=lambda: {"categories": [], "perimetres": [], "dates": []})
-        timestamp: str = ""
+from models.suggestion import AjustementPropose
 
 
 # =========================
@@ -41,14 +31,17 @@ def _get_all_categories() -> list[str]:
     perims = st.session_state.get("perimetres", {}) or {}
     return sorted(list(perims.keys()))
 
+
 def _get_cost_mapping() -> dict:
     """Mapping catégorie -> Type personnel (pour retrouver le coût horaire)."""
     return st.session_state.get("cost_mapping", {}) or {}
+
 
 def _get_personnel_df() -> pd.DataFrame:
     """Table des coûts horaires (colonnes attendues: 'Type', 'Coût Horaire')."""
     df = st.session_state.get("personnel", pd.DataFrame())
     return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
 
 def _hourly_rate_for_type(perso_df: pd.DataFrame, perso_type: str) -> float:
     """Retourne le coût horaire d'un type (0.0 si non trouvé/invalid)."""
@@ -60,6 +53,7 @@ def _hourly_rate_for_type(perso_df: pd.DataFrame, perso_type: str) -> float:
     except Exception:
         pass
     return 0.0
+
 
 def _hourly_rates_by_category() -> tuple[dict[str, float], list[str]]:
     """
@@ -85,11 +79,13 @@ def _hourly_rates_by_category() -> tuple[dict[str, float], list[str]]:
             rates[cat] = r
     return rates, missing
 
+
 def _safe_to_float(x, default=0.0) -> float:
     try:
         return float(x)
     except Exception:
         return float(default)
+
 
 def _compute_training_costs() -> tuple[float, float]:
     """
@@ -116,7 +112,9 @@ def _compute_training_costs() -> tuple[float, float]:
             df_formation.get("Nbre de shifts", 0), errors="coerce"
         ).fillna(0).astype(int).clip(lower=0)
         df_formation["Total (heures)"] = (
-            df_formation["Effectif (pers.)"] * df_formation["Heures"] * df_formation["Nbre de shifts"]
+            df_formation["Effectif (pers.)"]
+            * df_formation["Heures"]
+            * df_formation["Nbre de shifts"]
         )
         total_heures_formation = _safe_to_float(df_formation["Total (heures)"].sum(), 0.0)
     cout_formation = total_heures_formation * at_rate
@@ -124,7 +122,7 @@ def _compute_training_costs() -> tuple[float, float]:
     # ATF
     atf_rate = 52.00
     if not pers.empty:
-        atf_rate = _hourly_rate_for_type(perso=pers, perso_type="ATF") or atf_rate
+        atf_rate = _hourly_rate_for_type(pers, "ATF") or atf_rate
 
     total_heures_formateurs = 0.0
     if "budget_formateurs_at" in st.session_state:
@@ -139,12 +137,15 @@ def _compute_training_costs() -> tuple[float, float]:
             df_form.get("Nbre de shifts", 0), errors="coerce"
         ).fillna(0).astype(int).clip(lower=0)
         df_form["Total (heures)"] = (
-            df_form["Effectif (pers.)"] * df_form["Heures"] * df_form["Nbre de shifts"]
+            df_form["Effectif (pers.)"]
+            * df_form["Heures"]
+            * df_form["Nbre de shifts"]
         )
         total_heures_formateurs = _safe_to_float(df_form["Total (heures)"].sum(), 0.0)
     cout_formateurs = total_heures_formateurs * atf_rate
 
     return cout_formation, cout_formateurs
+
 
 def _base_cost_total_with_training() -> float:
     """
@@ -155,6 +156,7 @@ def _base_cost_total_with_training() -> float:
     c_form, c_formateurs = _compute_training_costs()
     return planif + c_form + c_formateurs
 
+
 def _weights_equitable() -> dict[str, float]:
     """Répartition équitable entre catégories."""
     cats = _get_all_categories()
@@ -162,6 +164,7 @@ def _weights_equitable() -> dict[str, float]:
         return {}
     w = 1.0 / len(cats)
     return {c: w for c in cats}
+
 
 def _weights_from_calendar_costs() -> dict[str, float]:
     """
@@ -193,6 +196,7 @@ def _weights_from_calendar_costs() -> dict[str, float]:
         return _weights_equitable()
     return {k: v / total for k, v in weights.items()}
 
+
 def _weights_from_hourly_rates() -> dict[str, float]:
     """Pro-rata des coûts horaires (cat plus chère = plus de poids)."""
     rates, _ = _hourly_rates_by_category()
@@ -201,24 +205,30 @@ def _weights_from_hourly_rates() -> dict[str, float]:
         return _weights_equitable()
     return {c: max(0.0, r) / total for c, r in rates.items()}
 
+
 def _apply_cap_and_normalize(pcts: dict[str, float], cap_pct: float, locked: set[str]) -> dict[str, float]:
     """
     Applique un cap (%) et renormalise à 100% en EXCLUANT les catégories verrouillées.
     - Les catégories verrouillées sont forcées à 0% et jamais renormalisées.
     - Tout le 100% est réparti entre les catégories non verrouillées.
     """
+    # 1) Verrou = 0
     out = {c: (0.0 if c in locked else max(0.0, p)) for c, p in pcts.items()}
 
+    # 2) Espace libre = catégories non verrouillées
     free = [c for c in out.keys() if c not in locked]
     if not free:
-        return out
+        return out  # tout verrouillé -> tout à 0
 
+    # 3) Cap sur les "free"
     if cap_pct < 100.0:
         for c in free:
             out[c] = min(out[c], cap_pct)
 
+    # 4) Renormalisation des "free" vers 100%
     total_free = sum(out[c] for c in free)
     if total_free <= 0:
+        # Si l'utilisateur a mis 0 partout, on répartit équitablement entre free
         eq = 100.0 / len(free)
         for c in free:
             out[c] = round(eq, 1)
@@ -227,10 +237,12 @@ def _apply_cap_and_normalize(pcts: dict[str, float], cap_pct: float, locked: set
     for c in free:
         out[c] = round(out[c] / total_free * 100.0, 1)
 
+    # locked restent à 0
     for c in locked:
         out[c] = 0.0
 
     return out
+
 
 def _round_value(val: float, mode: str) -> float:
     if mode == "Plafond (ceil)":
@@ -238,6 +250,7 @@ def _round_value(val: float, mode: str) -> float:
     if mode == "Plancher (floor)":
         return float(np.floor(val))
     return float(np.round(val))
+
 
 def _results_table(target_adjustment: float,
                    distrib_pct: dict[str, float],
@@ -256,7 +269,7 @@ def _results_table(target_adjustment: float,
             hours_raw = cost_adj_raw / rate
             hours = _round_value(hours_raw, rounding)
         else:
-            hours = np.nan
+            hours = np.nan  # non calculable (tarif manquant)
 
         rows.append({
             "Catégorie": cat,
@@ -270,6 +283,7 @@ def _results_table(target_adjustment: float,
     df = df.sort_values("Ajustement Coût (CHF)", ascending=False)
     return df
 
+
 def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, str, str]:
     """
     Tente d'exporter en XLSX (xlsxwriter, puis openpyxl en fallback).
@@ -277,9 +291,11 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
     Retourne: (bytes, extension, mime)
     """
     def _build_writer(writer):
+        # Résultats
         if "results" in scen_payload and isinstance(scen_payload["results"], pd.DataFrame):
             scen_payload["results"].to_excel(writer, sheet_name="Résultats", index=False)
 
+        # Hypothèses
         hyp = {
             "Objectif (CHF)": [scen_payload.get("target_adjustment", 0.0)],
             "Arrondi": [scen_payload.get("rounding", "")],
@@ -287,12 +303,13 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
         }
         pd.DataFrame(hyp).to_excel(writer, sheet_name="Hypothèses", index=False)
 
+        # Répartition
         distrib = scen_payload.get("distribution", {})
         if isinstance(distrib, dict) and distrib:
             df_distrib = pd.DataFrame([{"Catégorie": k, "Part (%)": v} for k, v in distrib.items()])
             df_distrib.to_excel(writer, sheet_name="Répartition", index=False)
 
-    # 1) xlsxwriter
+    # 1) Essai avec xlsxwriter
     try:
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine="xlsxwriter") as xw:
@@ -301,7 +318,8 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
         return out.read(), "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     except Exception:
         pass
-    # 2) openpyxl
+
+    # 2) Fallback openpyxl
     try:
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine="openpyxl") as xw:
@@ -310,7 +328,8 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
         return out.read(), "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     except Exception:
         pass
-    # 3) CSV fallback
+
+    # 3) Ultime fallback CSV (exporte uniquement la feuille 'Résultats')
     try:
         results = scen_payload.get("results")
         if isinstance(results, pd.DataFrame) and not results.empty:
@@ -322,23 +341,34 @@ def _export_scenario_excel(scen_name: str, scen_payload: dict) -> tuple[bytes, s
     st.error("Impossible de générer un fichier d’export (XLSX/CSV).")
     return b"", "bin", "application/octet-stream"
 
+
 def _import_scenario_from_file(uploaded_file) -> dict | None:
     """
     Importe un scénario depuis un fichier Excel ou CSV exporté.
-    Retourne un dict: {target_adjustment, distribution, rounding, cap_pct, results}
+    Retourne un dict avec: {
+        'target_adjustment': float,
+        'distribution': dict[str, float],
+        'rounding': str,
+        'cap_pct': float,
+        'results': pd.DataFrame
+    }
+    Retourne None en cas d'erreur.
     """
     try:
         filename = uploaded_file.name.lower()
 
-        if filename.endswith((".xlsx", ".xls")):
+        if filename.endswith('.xlsx') or filename.endswith('.xls'):
+            # Lire le fichier Excel (3 feuilles attendues)
             excel_file = pd.ExcelFile(uploaded_file)
 
+            # Feuille 1: Résultats
             if "Résultats" in excel_file.sheet_names:
                 results_df = pd.read_excel(excel_file, sheet_name="Résultats")
             else:
                 st.error("Feuille 'Résultats' introuvable dans le fichier Excel.")
                 return None
 
+            # Feuille 2: Hypothèses
             if "Hypothèses" in excel_file.sheet_names:
                 hyp_df = pd.read_excel(excel_file, sheet_name="Hypothèses")
                 target_adjustment = float(hyp_df.iloc[0]["Objectif (CHF)"])
@@ -346,72 +376,84 @@ def _import_scenario_from_file(uploaded_file) -> dict | None:
                 cap_pct = float(hyp_df.iloc[0]["Cap (%)"])
             else:
                 st.warning("Feuille 'Hypothèses' introuvable. Valeurs par défaut utilisées.")
-                target_adjustment = _safe_to_float(results_df.get("Ajustement Coût (CHF)", pd.Series()).sum(), 0.0)
+                target_adjustment = 0.0
                 rounding = "Au plus proche"
                 cap_pct = 100.0
 
+            # Feuille 3: Répartition
             if "Répartition" in excel_file.sheet_names:
                 distrib_df = pd.read_excel(excel_file, sheet_name="Répartition")
-                distribution = {str(r["Catégorie"]): float(r["Part (%)"]) for _, r in distrib_df.iterrows()}
-            else:
-                st.info("Feuille 'Répartition' absente. Reconstruction depuis 'Résultats'.")
                 distribution = {
-                    str(r["Catégorie"]): float(r.get("Part Répartition (%)", 0))
-                    for _, r in results_df.iterrows()
+                    str(row["Catégorie"]): float(row["Part (%)"])
+                    for _, row in distrib_df.iterrows()
+                }
+            else:
+                st.warning("Feuille 'Répartition' introuvable. Reconstruction depuis Résultats.")
+                distribution = {
+                    str(row["Catégorie"]): float(row.get("Part Répartition (%)", 0))
+                    for _, row in results_df.iterrows()
                 }
 
-        elif filename.endswith(".csv"):
+        elif filename.endswith('.csv'):
+            # Lire CSV (contient uniquement les résultats)
             results_df = pd.read_csv(uploaded_file)
 
+            # Reconstruire les métadonnées depuis les résultats
             if "Part Répartition (%)" in results_df.columns:
                 distribution = {
-                    str(r["Catégorie"]): float(r["Part Répartition (%)"])
-                    for _, r in results_df.iterrows()
+                    str(row["Catégorie"]): float(row["Part Répartition (%)"])
+                    for _, row in results_df.iterrows()
                 }
             else:
                 st.error("Colonne 'Part Répartition (%)' introuvable dans le CSV.")
                 return None
 
+            # Calculer target_adjustment depuis les résultats
             if "Ajustement Coût (CHF)" in results_df.columns:
                 target_adjustment = float(results_df["Ajustement Coût (CHF)"].sum())
             else:
                 st.error("Colonne 'Ajustement Coût (CHF)' introuvable dans le CSV.")
                 return None
 
+            # Valeurs par défaut pour les autres paramètres
             rounding = "Au plus proche"
             cap_pct = 100.0
-            st.info("CSV détecté → hypothèses par défaut appliquées (Arrondi='Au plus proche', Cap=100%).")
+            st.info("Format CSV détecté. Hypothèses par défaut: Arrondi='Au plus proche', Cap=100%")
+
         else:
-            st.error(f"Format non supporté: {filename}. Utilisez .xlsx, .xls ou .csv")
+            st.error(f"Format de fichier non supporté: {filename}. Utilisez .xlsx, .xls ou .csv")
             return None
 
-        # Validation minimale
+        # Validation des résultats
         required_cols = ["Catégorie", "Part Répartition (%)", "Ajustement Coût (CHF)"]
-        missing_cols = [c for c in required_cols if c not in results_df.columns]
+        missing_cols = [col for col in required_cols if col not in results_df.columns]
         if missing_cols:
-            st.error(f"Colonnes manquantes dans 'Résultats' : {', '.join(missing_cols)}")
+            st.error(f"Colonnes manquantes dans le fichier: {', '.join(missing_cols)}")
             return None
 
         return {
-            "target_adjustment": float(target_adjustment),
-            "distribution": {str(k): float(v) for k, v in distribution.items()},
-            "rounding": str(rounding),
-            "cap_pct": float(cap_pct),
-            "results": results_df,
+            'target_adjustment': target_adjustment,
+            'distribution': distribution,
+            'rounding': rounding,
+            'cap_pct': cap_pct,
+            'results': results_df
         }
 
     except Exception as e:
-        st.error(f"Erreur lors de l'import du scénario: {e}")
+        st.error(f"Erreur lors de l'import du fichier: {e}")
         return None
 
+
 def _auto_create_ajustement_propose(results_df: pd.DataFrame,
-                                    target_adjustment: float) -> None:
+                                     target_adjustment: float) -> None:
     """
     Crée automatiquement l'ajustement_propose pour l'Assistant Besoin Jour
     à partir des résultats du simulateur.
     """
-    from datetime import datetime as _dt
+    from datetime import datetime
+    from models.suggestion import AjustementPropose
 
+    # Créer la distribution à partir du DataFrame résultats
     distribution = {}
     for _, row in results_df.iterrows():
         cat = str(row['Catégorie'])
@@ -419,6 +461,7 @@ def _auto_create_ajustement_propose(results_df: pd.DataFrame,
         delta_c = row.get('Ajustement Coût (CHF)', 0)
         part_p = row.get('Part Répartition (%)', 0)
 
+        # Gérer les NaN
         delta_h = float(delta_h) if pd.notna(delta_h) else 0.0
         delta_c = float(delta_c) if pd.notna(delta_c) else 0.0
         part_p = float(part_p) if pd.notna(part_p) else 0.0
@@ -430,16 +473,25 @@ def _auto_create_ajustement_propose(results_df: pd.DataFrame,
         }
 
     total_hours = results_df['Ajustement Heures (h)'].fillna(0).sum()
+
+    # Récupérer les verrous si définis
     locked_perimetres = st.session_state.get('locked_perimetres_assist', [])
 
     ajustement = AjustementPropose(
         total_delta_hours=float(total_hours),
         total_delta_chf=float(target_adjustment),
         distribution=distribution,
-        locks={'categories': [], 'perimetres': locked_perimetres, 'dates': []},
-        timestamp=_dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        locks={
+            'categories': [],
+            'perimetres': locked_perimetres,
+            'dates': []
+        },
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
+
+    # Stocker dans session_state
     st.session_state.ajustement_propose = ajustement
+
 
 def _save_simulator_results_to_session(results_df: pd.DataFrame,
                                        target_adjustment: float,
@@ -448,7 +500,8 @@ def _save_simulator_results_to_session(results_df: pd.DataFrame,
                                        cap_pct: float) -> None:
     """
     Sauvegarde les résultats du simulateur dans st.session_state
-    pour consommation par l'assistant Besoin Jour (+ crée ajustement_propose).
+    pour consommation par l'assistant Besoin Jour.
+    Crée aussi automatiquement l'ajustement_propose pour l'Assistant.
     """
     if results_df is None or results_df.empty:
         st.session_state.pop("simulateur_objectif_results", None)
@@ -465,9 +518,10 @@ def _save_simulator_results_to_session(results_df: pd.DataFrame,
         "distribution_pct": {k: float(v) for k, v in distribution_pct.items()},
         "rounding": str(rounding),
         "cap_pct": float(cap_pct),
-        "saved_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "saved_at": pd.Timestamp.now().isoformat(timespec="seconds")
     }
 
+    # Créer automatiquement l'ajustement_propose pour l'Assistant
     _auto_create_ajustement_propose(df, target_adjustment)
 
 
@@ -491,91 +545,76 @@ def render_simulateur_objectif_page():
                    "Veuillez d'abord en générer un via la page **Budget Annuel**.")
         st.stop()
 
-    # Base
+    # Base de référence (cohérente avec Analyse / Budget Annuel)
     base_cost_total = _base_cost_total_with_training()
 
-    # ---------- Import immédiat de scénario (disponible dès le départ) ----------
-    st.markdown("### 📂 Importer un scénario (Excel/CSV)")
-    uploaded_file = st.file_uploader(
-        "Sélectionnez un fichier de scénario (.xlsx, .xls, .csv)",
-        type=["xlsx", "xls", "csv"],
-        key="scenario_uploader_sim",
-        help="Vous pouvez importer un scénario exporté précédemment à tout moment."
-    )
-    if uploaded_file is not None:
-        imported_data = _import_scenario_from_file(uploaded_file)
-        if imported_data:
-            # Reset des widgets de cible
-            for key in ('sim_target_adjustment', 'sim_target_percent'):
-                if key in st.session_state:
-                    del st.session_state[key]
+    # Gérer l'import de scénario (avant la création des widgets)
+    if 'pending_scenario_import' in st.session_state:
+        imported_data = st.session_state.pending_scenario_import
 
-            # Applique immédiatement le scénario importé
-            st.session_state.sim_target_adjustment = float(imported_data['target_adjustment'])
-            st.session_state.sim_target_percent = (
-                (float(imported_data['target_adjustment']) / base_cost_total * 100.0)
-                if base_cost_total > 0 else 0.0
-            )
+        # Supprimer les clés liées aux widgets pour pouvoir les réassigner
+        for key in ['sim_target_adjustment', 'sim_target_percent']:
+            if key in st.session_state:
+                del st.session_state[key]
 
-            # Restaurer la distribution (%)
-            for cat, pct in imported_data['distribution'].items():
-                st.session_state[f"distrib_pct_{cat}"] = float(pct)
+        # Assigner les nouvelles valeurs
+        st.session_state.sim_target_adjustment = imported_data['target_adjustment']
+        st.session_state.sim_target_percent = (
+            imported_data['target_adjustment'] / base_cost_total * 100.0
+            if base_cost_total > 0 else 0.0
+        )
 
-            # Sauvegarder résultats + meta + ajustement pour l’assistant
-            _save_simulator_results_to_session(
-                results_df=imported_data['results'],
-                target_adjustment=float(imported_data['target_adjustment']),
-                distribution_pct=imported_data['distribution'],
-                rounding=str(imported_data['rounding']),
-                cap_pct=float(imported_data['cap_pct'])
-            )
-            st.success(f"✅ Scénario importé: objectif {imported_data['target_adjustment']:,.0f} CHF")
-            st.rerun()
+        # Restaurer la distribution
+        for cat, pct in imported_data['distribution'].items():
+            key = f"distrib_pct_{cat}"
+            if key in st.session_state:
+                del st.session_state[key]
+            st.session_state[key] = float(pct)
+
+        # Restaurer les résultats
+        _save_simulator_results_to_session(
+            results_df=imported_data['results'],
+            target_adjustment=imported_data['target_adjustment'],
+            distribution_pct=imported_data['distribution'],
+            rounding=imported_data['rounding'],
+            cap_pct=imported_data['cap_pct']
+        )
+
+        # Nettoyer la clé temporaire
+        del st.session_state.pending_scenario_import
+
+        st.success(f"✅ Scénario chargé avec succès ! Objectif: {imported_data['target_adjustment']:,.0f} CHF")
+        st.rerun()
 
     st.markdown("---")
     with st.container(border=True):
         st.subheader("Simulation d'Objectif de Coût Annuel")
         st.metric("Budget Annuel de Base (avec formation)", f"{base_cost_total:,.0f} CHF")
 
-        # --- Compactage visuel colonnes + boutons presets ---
-        st.markdown("""
-        <style>
-        div[data-testid="stHorizontalBlock"] { gap: .25rem !important; }
-        div[data-testid="column"] { padding-left: .125rem !important; padding-right: .125rem !important; }
-        .stButton > button {
-          padding: .25rem .5rem !important;
-          line-height: 1.1 !important;
-          min-height: 1.8rem !important;
-          font-size: 0.85rem !important;
-          margin: 0 !important;
-          border-radius: .5rem !important;
-          white-space: nowrap !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
         # ==== Presets d'objectif ====
-        colp1, colp2, colp3, colp4, colp5, _sp = st.columns([0.8, 0.9, 1.0, 0.9, 1.0, 3], gap="small")
+        colp1, colp2, colp3, colp4, colp5 = st.columns(5)
         with colp1:
-            if st.button("−2%", key="preset_m2"):
+            if st.button("−2%"):
                 st.session_state.sim_target_adjustment = round(-0.02 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -2.0
         with colp2:
-            if st.button("−5%", key="preset_m5"):
+            if st.button("−5%"):
                 st.session_state.sim_target_adjustment = round(-0.05 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -5.0
         with colp3:
-            if st.button("−10%", key="preset_m10"):
+            if st.button("−10%"):
                 st.session_state.sim_target_adjustment = round(-0.10 * base_cost_total, 0)
                 st.session_state.sim_target_percent = -10.0
         with colp4:
-            if st.button("+2%", key="preset_p2"):
+            if st.button("+2%"):
                 st.session_state.sim_target_adjustment = round(+0.02 * base_cost_total, 0)
                 st.session_state.sim_target_percent = +2.0
         with colp5:
-            if st.button("Réinit.", key="preset_reset"):
+            if st.button("Réinitialiser"):
                 st.session_state.sim_target_adjustment = 0.0
                 st.session_state.sim_target_percent = 0.0
+
+            
 
         # ==== Mode d'objectif : CHF ou % ====
         mode_obj = st.radio(
@@ -589,14 +628,19 @@ def render_simulateur_objectif_page():
             target_adjustment = st.number_input(
                 "Objectif d'ajustement (CHF — négatif pour réduire)",
                 value=_safe_to_float(st.session_state.get("sim_target_adjustment", 0.0), 0.0),
-                step=1000.0, format="%.0f", key="sim_target_adjustment",
-                help="Ex: -150000 pour réduire de 150k."
+                step=1000.0,
+                format="%.0f",
+                key="sim_target_adjustment",
+                help="Saisir un montant total à répartir entre les catégories (ex: -150000 pour réduire de 150k).",
             )
         else:
+            # % manuel appliqué à la base (avec formation)
             target_percent = st.number_input(
                 "Objectif d'ajustement (%) — négatif pour réduire",
                 value=_safe_to_float(st.session_state.get("sim_target_percent", 0.0), 0.0),
-                step=0.5, format="%.1f", key="sim_target_percent",
+                step=0.5,
+                format="%.1f",
+                key="sim_target_percent",
                 help="Ex: -5.0 pour réduire de 5% le budget annuel (avec formation).",
             )
             target_adjustment = round(base_cost_total * (target_percent / 100.0), 0)
@@ -608,10 +652,11 @@ def render_simulateur_objectif_page():
         colm1, colm2, colm3, colm4 = st.columns(4)
         do_equitable = colm1.button("Équitable")
         do_planif = colm2.button("Pro-rata **coûts planifiés**")
-        do_rates   = colm3.button("Pro-rata **coûts horaires**")
-        do_clear   = colm4.button("Tout mettre à 0%")
+        do_rates = colm3.button("Pro-rata **coûts horaires**")
+        do_clear = colm4.button("Tout mettre à 0%")
 
         cats = _get_all_categories()
+        # init state for distrib
         for c in cats:
             st.session_state.setdefault(f"distrib_pct_{c}", 0.0)
 
@@ -619,14 +664,17 @@ def render_simulateur_objectif_page():
             w = _weights_equitable()
             for c, p in w.items():
                 st.session_state[f"distrib_pct_{c}"] = round(p * 100.0, 1)
+
         if do_planif:
             w = _weights_from_calendar_costs()
             for c, p in w.items():
                 st.session_state[f"distrib_pct_{c}"] = round(p * 100.0, 1)
+
         if do_rates:
             w = _weights_from_hourly_rates()
             for c, p in w.items():
                 st.session_state[f"distrib_pct_{c}"] = round(p * 100.0, 1)
+
         if do_clear:
             for c in cats:
                 st.session_state[f"distrib_pct_{c}"] = 0.0
@@ -642,8 +690,7 @@ def render_simulateur_objectif_page():
                                       help="Limite la part maximale de l'objectif assignable à une catégorie.")
         with col_opt3:
             locked_cats = st.multiselect("Verrouiller des catégories (inchangées)",
-                                         options=cats, default=[],
-                                         help="Les % verrouillés restent à 0% et ne sont jamais renormalisés.")
+                                         options=cats, default=[], help="Les % verrouillés restent à 0% et ne sont jamais renormalisés.")
 
         # ==== Saisie des pourcentages ====
         distrib_pct = {}
@@ -658,14 +705,16 @@ def render_simulateur_objectif_page():
                 except StopIteration:
                     break
                 key = f"distrib_pct_{c}"
-                val = st.number_input(f"% {c}", min_value=0.0, max_value=100.0, step=1.0, key=key, format="%.1f")
+                val = st.number_input(f"% {c}",
+                                      min_value=0.0, max_value=100.0, step=1.0,
+                                      key=key, format="%.1f")
                 distrib_pct[c] = _safe_to_float(val, 0.0)
 
         # Normalisations (verrous + cap + 100%)
         distrib_pct = _apply_cap_and_normalize(distrib_pct, cap_pct, set(locked_cats))
         total_pct = sum(distrib_pct.values())
 
-        # Bandeau d’état
+        # Bandeau d’état (après normalisation)
         rates, missing_rates = _hourly_rates_by_category()
         st.info(
             f"État: Répartition normalisée={total_pct:.1f}% | Arrondi={rounding} | Cap={cap_pct:.0f}% | "
@@ -679,6 +728,7 @@ def render_simulateur_objectif_page():
         st.divider()
 
         # ==== Calcul & affichages ====
+        # Vérifier si on a des résultats sauvegardés à afficher
         has_saved_results = (
             "simulateur_objectif_results" in st.session_state and
             st.session_state["simulateur_objectif_results"] is not None and
@@ -686,6 +736,7 @@ def render_simulateur_objectif_page():
         )
 
         if target_adjustment == 0:
+            # Si pas d'objectif actuel mais résultats sauvegardés, les afficher
             if has_saved_results:
                 col_info, col_clear = st.columns([4, 1])
                 with col_info:
@@ -695,11 +746,15 @@ def render_simulateur_objectif_page():
                         st.session_state.pop("simulateur_objectif_results", None)
                         st.session_state.pop("simulateur_objectif_meta", None)
                         st.rerun()
+
                 results_df = st.session_state["simulateur_objectif_results"].copy()
                 saved_meta = st.session_state.get("simulateur_objectif_meta", {})
-                saved_target = _safe_to_float(saved_meta.get("target_adjustment", 0), 0.0)
+                saved_target = saved_meta.get("target_adjustment", 0)
+
+                # Restaurer automatiquement l'ajustement_propose pour l'Assistant
                 _auto_create_ajustement_propose(results_df, saved_target)
 
+                # Afficher métadonnées
                 if saved_meta:
                     col_meta1, col_meta2, col_meta3 = st.columns(3)
                     with col_meta1:
@@ -712,7 +767,10 @@ def render_simulateur_objectif_page():
                 st.info("Saisissez un objectif d'ajustement non nul pour lancer la simulation.")
                 return
         else:
+            # Calculer de nouveaux résultats
             results_df = _results_table(target_adjustment, distrib_pct, rates, rounding)
+
+            # ⬇️ Enregistrement automatique pour l'assistant Besoin Jour
             _save_simulator_results_to_session(
                 results_df=results_df,
                 target_adjustment=target_adjustment,
@@ -723,7 +781,9 @@ def render_simulateur_objectif_page():
 
         st.subheader("Résultat de la Simulation")
         st.dataframe(
-            results_df, hide_index=True, use_container_width=True,
+            results_df,
+            hide_index=True,
+            use_container_width=True,
             column_config={
                 "Part Répartition (%)": st.column_config.NumberColumn(format="%.1f%%"),
                 "Ajustement Coût (CHF)": st.column_config.NumberColumn(format="%.0f"),
@@ -748,6 +808,8 @@ def render_simulateur_objectif_page():
         if not results_df.empty:
             top = results_df.sort_values("Ajustement Coût (CHF)", ascending=False)
 
+            # Barres (CHF)
+            # Remarque : Altair v5 exige des noms de champs valides et types corrects.
             bar_chf = alt.Chart(top).mark_bar().encode(
                 x=alt.X("Ajustement Coût (CHF):Q", title="Impact (CHF)"),
                 y=alt.Y("Catégorie:N", sort='-x', title="Catégorie"),
@@ -760,15 +822,19 @@ def render_simulateur_objectif_page():
                 ],
                 color=alt.value("#0076AA") if target_adjustment >= 0 else alt.value("#DC143C")
             ).properties(height=320)
+
             st.altair_chart(bar_chf, use_container_width=True)
 
+            # Pseudo-waterfall (cumul sur l'ordre trié)
             wf_df = top.copy()
             wf_df["Cumul (CHF)"] = wf_df["Ajustement Coût (CHF)"].cumsum()
+
             wf_line = alt.Chart(wf_df).mark_line(point=True).encode(
                 x=alt.X("Catégorie:N", title="Catégorie"),
                 y=alt.Y("Cumul (CHF):Q", title="Cumul (CHF)"),
                 tooltip=[alt.Tooltip("Catégorie:N"), alt.Tooltip("Cumul (CHF):Q", format=",")]
             ).properties(height=260)
+
             st.altair_chart(wf_line, use_container_width=True)
 
         st.divider()
@@ -788,7 +854,7 @@ def render_simulateur_objectif_page():
             st.session_state.setdefault("sim_scenarios", {})[sc_name] = scen_payload
             st.success(f"Scénario **{sc_name}** enregistré.")
 
-            # Met à jour l’état partagé pour l’assistant (sécurité)
+            # (optionnel) rafraîchir l’état partagé pour l’assistant :
             _save_simulator_results_to_session(
                 results_df=results_df,
                 target_adjustment=target_adjustment,
@@ -806,12 +872,41 @@ def render_simulateur_objectif_page():
                 "cap_pct": float(cap_pct),
                 "results": results_df.copy(),
             })
-            label = "⬇️ Exporter ce scénario (Excel)" if ext == "xlsx" else "⬇️ Exporter ce scénario (CSV – fallback)"
-            st.download_button(label, data=file_bytes, file_name=f"simulateur_objectif_{sc_name}.{ext}", mime=mime)
+
+            label = "⬇️ Exporter ce scénario"
+            if ext == "csv":
+                label += " (CSV – fallback)"
+            else:
+                label += " (Excel)"
+
+            st.download_button(
+                label,
+                data=file_bytes,
+                file_name=f"simulateur_objectif_{sc_name}.{ext}",
+                mime=mime
+            )
+
+        # ==== Import de scénario ====
+        st.markdown("**Charger un scénario depuis un fichier**")
+        uploaded_file = st.file_uploader(
+            "📁 Sélectionner un fichier de scénario (Excel ou CSV)",
+            type=["xlsx", "xls", "csv"],
+            key="scenario_uploader",
+            help="Chargez un scénario exporté précédemment pour le réutiliser"
+        )
+
+        if uploaded_file is not None:
+            if st.button("⬆️ Charger ce scénario", key="load_scenario_btn"):
+                imported_data = _import_scenario_from_file(uploaded_file)
+
+                if imported_data:
+                    # Stocker dans une clé temporaire pour traitement au prochain rendu
+                    st.session_state.pending_scenario_import = imported_data
+                    st.rerun()
 
         st.divider()
 
-        # === Comparaison de scénarios ===
+        # === Comparaison de scénarios (robuste) ===
         scen_keys = list(st.session_state.get("sim_scenarios", {}).keys())
         if len(scen_keys) >= 2:
             colc1, colc2 = st.columns(2)
@@ -819,30 +914,40 @@ def render_simulateur_objectif_page():
                 sA = st.selectbox("Scénario A", scen_keys, key="cmpA")
             with colc2:
                 sB = st.selectbox("Scénario B", scen_keys, key="cmpB")
-
+        
             if sA and sB and sA != sB:
                 try:
                     A = st.session_state.sim_scenarios[sA]["results"].copy()
                     B = st.session_state.sim_scenarios[sB]["results"].copy()
+        
+                    # Garantir la présence des colonnes et numeric
                     for df_ in (A, B):
                         for col in ["Ajustement Coût (CHF)", "Ajustement Heures (h)"]:
                             if col not in df_.columns:
                                 df_[col] = 0.0
                             df_[col] = pd.to_numeric(df_[col], errors="coerce")
-
+        
+                    # Merge et deltas
                     cmp = A.merge(B, on="Catégorie", how="outer", suffixes=("_A", "_B"))
-                    cmp["Delta_Cout"] = (cmp["Ajustement Coût (CHF)_B"].fillna(0.0) - cmp["Ajustement Coût (CHF)_A"].fillna(0.0)).astype(float)
-                    cmp["Delta_Heures"] = (cmp["Ajustement Heures (h)_B"].fillna(0.0) - cmp["Ajustement Heures (h)_A"].fillna(0.0)).astype(float)
-
+                    cmp["Delta_Cout"] = (
+                        cmp["Ajustement Coût (CHF)_B"].fillna(0.0) - cmp["Ajustement Coût (CHF)_A"].fillna(0.0)
+                    ).astype(float)
+                    cmp["Delta_Heures"] = (
+                        cmp["Ajustement Heures (h)_B"].fillna(0.0) - cmp["Ajustement Heures (h)_A"].fillna(0.0)
+                    ).astype(float)
+        
+                    # Affichage tableau comparaison
                     cmp_display = cmp[[
                         "Catégorie",
                         "Ajustement Coût (CHF)_A", "Ajustement Coût (CHF)_B", "Delta_Cout",
                         "Ajustement Heures (h)_A", "Ajustement Heures (h)_B", "Delta_Heures",
                     ]].copy()
-
+        
                     st.markdown("#### Comparaison A vs B")
                     st.dataframe(
-                        cmp_display, use_container_width=True, hide_index=True,
+                        cmp_display,
+                        use_container_width=True,
+                        hide_index=True,
                         column_config={
                             "Ajustement Coût (CHF)_A": st.column_config.NumberColumn("Coût (A)", format="%.0f"),
                             "Ajustement Coût (CHF)_B": st.column_config.NumberColumn("Coût (B)", format="%.0f"),
@@ -852,38 +957,54 @@ def render_simulateur_objectif_page():
                             "Delta_Heures": st.column_config.NumberColumn("Δ Heures (B−A)", format="%.0f"),
                         },
                     )
-
+        
+                    # Long format propre pour Altair
                     long = cmp.melt(
                         id_vars="Catégorie",
                         value_vars=["Delta_Cout", "Delta_Heures"],
-                        var_name="Type", value_name="Delta",
+                        var_name="Type",
+                        value_name="Delta",
                     )
                     long = long[pd.notna(long["Delta"])].copy()
                     long["Delta"] = long["Delta"].astype(float)
-                    long["Type"] = long["Type"].map({"Delta_Cout": "Δ Coût (B−A)", "Delta_Heures": "Δ Heures (B−A)"})
-
+                    long["Type"] = long["Type"].map({
+                        "Delta_Cout": "Δ Coût (B−A)",
+                        "Delta_Heures": "Δ Heures (B−A)",
+                    })
+        
+                    # Barres des deltas
                     if not long.empty:
                         cmp_bar = alt.Chart(long).mark_bar().encode(
                             x=alt.X("Delta:Q", title="Delta (B−A)"),
                             y=alt.Y("Catégorie:N", sort='-x'),
                             color=alt.Color("Type:N", legend=alt.Legend(title="Mesure")),
-                            tooltip=[alt.Tooltip("Catégorie:N"), alt.Tooltip("Type:N"), alt.Tooltip("Delta:Q", format=",")],
+                            tooltip=[
+                                alt.Tooltip("Catégorie:N"),
+                                alt.Tooltip("Type:N"),
+                                alt.Tooltip("Delta:Q", format=","),
+                            ],
                         ).properties(height=320)
                         st.altair_chart(cmp_bar, use_container_width=True)
                     else:
                         st.info("Aucun delta à afficher.")
+        
                 except Exception as e:
                     st.warning(f"Comparaison : affichage du graphique indisponible ({e}).")
+                    # On n'empêche pas la page de fonctionner — le tableau ci-dessus reste utile.
 
         st.divider()
 
         # ==== Intégration Assistant Besoin Jour ====
         st.subheader("🤖 Assistant Besoin Jour")
+
+        # Vérifier si ajustement est disponible
         if 'ajustement_propose' in st.session_state and st.session_state.ajustement_propose:
             st.success(
                 "✅ Ajustement automatiquement disponible pour l'Assistant Besoin Jour ! "
                 "Rendez-vous sur la page **Assistant Besoin Jour** pour générer les suggestions."
             )
+
+            # Afficher info sur l'ajustement
             ajust = st.session_state.ajustement_propose
             col_info1, col_info2 = st.columns(2)
             with col_info1:
@@ -894,25 +1015,34 @@ def render_simulateur_objectif_page():
         else:
             st.info("Aucun ajustement en attente pour l'Assistant.")
 
+        # Options avancées (verrous)
         with st.expander("⚙️ Options Avancées (Verrous)"):
-            st.markdown("Les verrous empêchent l'assistant de modifier certains périmètres ou dates spécifiques.")
+            st.markdown(
+                "Les verrous empêchent l'assistant de modifier certains "
+                "périmètres ou dates spécifiques."
+            )
             locked_perimetres_assist = st.multiselect(
                 "Verrouiller des périmètres (AT)",
                 options=st.session_state.get("perimetres", {}).get("AT", []),
                 default=st.session_state.get('locked_perimetres_assist', []),
                 key="locked_perimetres_assist"
             )
+
+            # Mettre à jour les verrous dans l'ajustement si modifiés
             if 'ajustement_propose' in st.session_state and st.session_state.ajustement_propose:
                 st.session_state.ajustement_propose.locks['perimetres'] = locked_perimetres_assist
+
 
     # Aide
     with st.expander("ℹ️ Aide & Hypothèses"):
         st.markdown("""
 - **Ce simulateur n’applique pas les règles opérationnelles** (*Besoin Jour*). Il sert à estimer
   l'impact **macro** d’un objectif de coût, converti en heures via les tarifs.
-- Utilisez les **presets** (±2/5/10 %) puis affinez avec la **répartition** et les **verrous**.
-- Le **cap** limite la part maximale par catégorie ; l’**arrondi** s’applique aux montants et aux heures.
-- Vous pouvez **importer un scénario** à tout moment (en haut de page), **enregistrer**, **comparer** et **exporter**.
+- Utilisez les **presets** pour gagner du temps (±2/5/10 %), puis affinez avec la **répartition**.
+- Les **verrous** conservent la catégorie à **0%** (pas d’impact) et elle n’est pas renormalisée.
+- Le **cap** limite la part maximale de l’objectif assignable par catégorie.
+- L’**arrondi** s’applique aux montants et aux heures.
+- Enregistrez des **scénarios** pour comparer les impacts et **exportez** vers Excel (ou CSV fallback).
 """)
 
 
