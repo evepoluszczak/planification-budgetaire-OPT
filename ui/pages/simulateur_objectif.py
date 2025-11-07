@@ -589,6 +589,23 @@ def render_simulateur_objectif_page():
     with st.container(border=True):
         st.subheader("Simulation d'Objectif de Coût Annuel")
         st.metric("Budget Annuel de Base (avec formation)", f"{base_cost_total:,.0f} CHF"
+
+        st.markdown("""
+        <style>
+        /* Réduit l’écart entre colonnes */
+        div[data-testid="stHorizontalBlock"] { gap: .25rem !important; }
+        
+        /* Boutons plus compacts */
+        .stButton > button {
+          padding: .25rem .5rem !important;
+          line-height: 1.1 !important;
+          min-height: 2rem !important;
+          margin: 0 !important;
+          border-radius: .5rem !important;
+          white-space: nowrap !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
     
         
         # ==== Presets d'objectif ====
