@@ -548,6 +548,12 @@ def render_simulateur_objectif_page():
     # Base de référence (cohérente avec Analyse / Budget Annuel)
     base_cost_total = _base_cost_total_with_training()
 
+    # Initialize session state keys for widgets (avoid value/session_state conflict)
+    if "sim_target_adjustment" not in st.session_state:
+        st.session_state.sim_target_adjustment = 0.0
+    if "sim_target_percent" not in st.session_state:
+        st.session_state.sim_target_percent = 0.0
+
     # Gérer l'import de scénario (avant la création des widgets)
     if 'pending_scenario_import' in st.session_state:
         imported_data = st.session_state.pending_scenario_import
@@ -648,7 +654,6 @@ def render_simulateur_objectif_page():
         if mode_obj == "Montant (CHF)":
             target_adjustment = st.number_input(
                 "Objectif d'ajustement (CHF — négatif pour réduire)",
-                value=_safe_to_float(st.session_state.get("sim_target_adjustment", 0.0), 0.0),
                 step=1000.0,
                 format="%.0f",
                 key="sim_target_adjustment",
@@ -658,7 +663,6 @@ def render_simulateur_objectif_page():
             # % manuel appliqué à la base (avec formation)
             target_percent = st.number_input(
                 "Objectif d'ajustement (%) — négatif pour réduire",
-                value=_safe_to_float(st.session_state.get("sim_target_percent", 0.0), 0.0),
                 step=0.5,
                 format="%.1f",
                 key="sim_target_percent",
