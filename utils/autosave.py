@@ -15,7 +15,7 @@ from config.constants import RULES_BESOIN_JOUR_PATH, TIME_SLOTS
 
 AUTOSAVE_DIR = Path("autosaves")
 AUTOSAVE_FILE = AUTOSAVE_DIR / "autosave_session.json"  # Fichier principal (le plus récent)
-MAX_AUTOSAVES = 5  # Nombre maximum de sauvegardes à conserver
+MAX_AUTOSAVES = 50  # Nombre maximum de sauvegardes historiques à conserver (garantit plusieurs jours)
 
 
 def _compute_session_hash():
@@ -474,7 +474,8 @@ def _cleanup_old_autosaves():
         backup_files.sort()
 
         # Supprimer les plus anciens si on dépasse MAX_AUTOSAVES
-        while len(backup_files) >= MAX_AUTOSAVES:
+        # Changé de >= à > pour garder exactement MAX_AUTOSAVES fichiers
+        while len(backup_files) > MAX_AUTOSAVES:
             _, old_file = backup_files.pop(0)
             try:
                 old_file.unlink()
